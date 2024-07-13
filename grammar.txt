@@ -1,0 +1,66 @@
+statements := NewLine* statement (NewLine+ statement)* NewLine*
+
+statement := expr 
+          := Keyword::return expr?
+          := Keyword::continue
+          := Keyword::break
+
+expr := Keyword::var Identifier OP_Eq expr 
+     := comp-expr ((Keyword::and|Keyword::or) comp-expr)*
+
+comp-expr := not comp-expr
+          := arith-expr ((OP_Equal|OP_Nequal|OP_Lt|OP_Lte|OP_Gt|OP_Gte) arith-expr)*
+
+subsciption := (OP_LSquare expr OP_RSquare)* subsciptive-assignment?
+subsciptive-assignment := OP_Eq expr
+attribution := Dot Identifier attribution-assignment?
+attribution-assignment := OP_Eq expr
+
+arith-expr := term ((OP_Plus|OP_Minus) term)*
+
+term := factor ((OP_Mul|OP_Div) factor)*
+
+factor := Int|Float
+       := (OP_Plus|OP_Minus) factor
+       := OP_Lparen expr OP_RParen
+       := power
+       := Identifier (subsciption | attribution)?
+
+power := function-call (OP_Pow factor)*
+
+function-call := atom (OP_Lparen (expr (Comma expr)*)? OP_RParen)
+
+atom := Int|Float|String|Identifier
+     := OP_Lparen expr OP_RParen
+     := list-expr
+     := if-expr
+     := while-expr
+     := for-expr
+     := function-definition
+     := new expr
+
+list-expr := OP_LSquare (expr (Comma expr)*)? OP_RSquare list-subscription?
+
+dictionary-expr := LStart (expr Colon expr (Comma expr Colon expr)*)? RStart
+
+list-subscription := OP_LSquare expr OP_RSquare list-setitem?
+
+list-setitem := OP_Eq expr
+
+if-expr := Keyword::if expr Keyword::then (statement if-expr-b | if-expr-c?) | (NewLine statements Keyword::end | if-expr-b | if-expr-c)
+
+if-expr-b := Keyword::elif expr Keyword::then (statement if-expr-b | if-expr-c?) | (NewLine statements Keyword::end | if-expr-b | if-expr-c)
+
+if-expr-c := Keyword::else (statement | (NewLine statements Keyword::end))
+
+while-expr := Keyword::while expr Keyword::then 
+          statement
+          | (NewLine statements Keyword::end)
+
+for-expr := Keyword::for Identifier OP_Eq expr ((Keyword::to expr (Keyword::step expr)?) | (Keyword::in) expr) Keyword::then 
+          statement
+          | (NewLine statements Keyword::end)
+
+function-definition := Keyword::function Identifier? OP_Lparen (Identifier (Comma Identifier)*)? OP_RParen 
+                    (Arrow expr)
+                    | (NewLine statements Keyword::end)
