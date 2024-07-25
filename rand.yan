@@ -1,5 +1,0 @@
-var _rand = require('@rand.Random')
-import('math')
-
-
-function rand(a, b) -> math.imod(_rand(), b) + a
