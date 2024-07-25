@@ -1,0 +1,16 @@
+var _open = require('@fs.Open')
+var _close = require('@fs.Close')
+
+
+function open(filename, mode)
+    if typeof(mode) != typeof('') then
+        return _open(filename)
+    else
+        return _open(filename, mode)
+    end
+end
+
+
+function close(fileObject)
+    _close(fileObject)
+end

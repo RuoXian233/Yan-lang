@@ -1,0 +1,108 @@
+var mod = import('math.imod')
+
+function open(file) -> readFile(file)
+
+function _isOdd(n)
+    return mod(n, 2) == 1
+end
+
+function Dict(keys, values)
+    var dict = []
+    if len(keys) != len(values) then
+        println('DictOperationError: Keys and values mismatched!')
+        return
+    end
+    var length = len(keys)
+    
+    for index = 0 to length * 2 then
+        if _isOdd(index) then
+            var dict = dict + values / (index / 2)
+        else
+            var dict = dict + keys / (index / 2)
+        end
+    end
+
+    return dict
+end
+
+function Dict_getKeys(d)
+    var keys = []
+    for index = 0 to len(d) then
+        if not _isOdd(index) then
+            var keys = keys + d / index
+        end
+    end
+    return keys
+end
+
+function Dict_getValues(d)
+    var values = []
+    for index = 0 to len(d) then
+        if _isOdd(index) then
+            var values = values + d / index
+        end
+    end
+    return values
+end
+
+
+function Dict_get(d, key)
+    var keys = Dict_getKeys(d)
+    var values = Dict_getValues(d)
+
+    for check_index = 0 to len(keys) then
+        if key == keys / check_index then
+            return values / check_index
+        end
+    end
+    println('KeyError: ' + str(key))
+    return
+end
+
+
+function Dict_set(d, key, newVal)
+    var keys = Dict_getKeys(d)
+    var values = Dict_getValues(d)
+    var hasKey = 0
+
+    for check_index = 0 to len(keys) then
+        if key == keys / check_index then
+	    set(values, check_index, newVal)
+            var hasKey = 1
+        end
+    end
+
+    if hasKey then
+        return Dict(keys, values)
+    else
+        println('KeyError: ' + key)
+        return
+    end
+end
+
+
+function Dict_toString(d)
+    var result = '{'
+    for i = 0 to len(d) then
+        if not _isOdd(i) then
+            var quote = ''
+            if typeof(d / i) == typeof('') then
+                var quote = '\''
+            end
+            var result = result + quote + str(d / i) + quote + ': '
+        else
+            var quote = ''
+            if typeof(d / i) == typeof('') then
+                var quote = '\''
+            end
+            var result = result + quote + str(d / i) + quote
+            if i != len(d) - 1 then
+                var result = result + ', '
+            end
+        end
+    end
+    return result + '}'
+end
+
+function getAttr(d, attr) -> Dict_get(d, attr)
+function setAttr(d, attr, val) -> Dict_set(d, attr, val)

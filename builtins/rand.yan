@@ -1,0 +1,7 @@
+var _rand = require('@rand.Random')
+var _randint = require('@rand.RandInt')
+import('math')
+
+
+function random(a, b) -> math.imod(_rand(), b) + a
+function randint(a, b) -> _randint(a, b)
