@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
     }
 
     startAsShell = true;
-    CopyCommandLineArgs(argc, argv, InterpreterStartMode::Repl, globalSymbolTable);
+    // CopyCommandLineArgs(argc, argv, InterpreterStartMode::Repl, globalSymbolTable);
 
     std::string versionInfo = std::format("Yan {} {} {} on {}", YAN_LANG_VERSION, compilationTimeStamp, compilerInfo, platform);
     std::cout << versionInfo << std::endl;
@@ -44,6 +44,7 @@ int main(int argc, char **argv) {
             std::cout << "REPL Commands (Start with '$'):\n  "
             "$exit: Terminate the session\n  $module: Prints current imported module and symbols\n"
             "  $external: Prints currently loaded external symbols\n"
+            "  $env: Prints environment variables associated to the interpreter\n"
             "  $(cls|clear): Clear screen (Win32|POSIX)\n  $yan: Print the version string\n  $globals: Print the global symbol table\n  $help: Print help message" << std::endl;
             continue;
         } else if (code == "$globals") {
@@ -69,6 +70,12 @@ int main(int argc, char **argv) {
             std::cout << "External (native) symbols:" << std::endl;
             for (auto &[k, v] : dynamicLoadedSymbol) {
                 std::cout << "  " << k << ": " << v.first << " (" << v.second << ")" << std::endl;
+            }
+            continue;
+        } else if (code == "$env") {
+            std::cout << "Yan Environment variables:" << std::endl;    
+            for (auto &[k, v] : builtins::GetVars()) {
+                std::cout << "  " << k << "='" << v << "'" << std::endl;
             }
             continue;
         } else if (code.starts_with("$")) {

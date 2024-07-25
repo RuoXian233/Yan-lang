@@ -1216,6 +1216,7 @@ public:
     explicit Parser(Tokens tks) : tokenIndex(-1) {        
         this->tokens = tks;
         this->Advance();
+        this->functionLayers = 0;
     }
 
     Token Reverse(unsigned amount = 1) {
@@ -1241,7 +1242,7 @@ public:
         auto posStart = this->currentToken.st->Copy();
 
         if (this->currentToken.Matches<std::string>(TokenType::Keyword, "return")) {
-            if (!this->insideAFunction) {
+            if (this->functionLayers == 0) {
                 return result->Failure(new SyntaxError(
                     "'return' outside a user-defined function",
                     this->currentToken.st, this->currentToken.et
@@ -1270,9 +1271,10 @@ public:
 
         auto expr = result->Register(this->Expr());
         if (result->err != nullptr) {
-            return result->Failure(new SyntaxError(
-                "Invilid statement", this->currentToken.st, this->currentToken.et
-            ));
+            // return result->Failure(new SyntaxError(
+            //     "Invilid statement", this->currentToken.st, this->currentToken.et
+            // ));
+            return result;
         }
         return result->Success(expr);
     }
@@ -1358,10 +1360,11 @@ public:
             } else {
                 args.push_back(result->Register(this->Expr()));
                 if (result->err != nullptr) {
-                    return result->Failure(new SyntaxError(
-                        "Invilid function call",
-                        this->currentToken.st, this->currentToken.et
-                    ));
+                    // return result->Failure(new SyntaxError(
+                    //     "Invilid function call",
+                    //     this->currentToken.st, this->currentToken.et
+                    // ));
+                    return result;
                 }
 
                 while (this->currentToken.type == TokenType::Comma) {
@@ -1522,10 +1525,11 @@ public:
         } else {
             currentKey = result->Register(this->Expr());
             if (result->err != nullptr) {
-                return result->Failure(new SyntaxError(
-                    "Invilid dictionary definition",
-                    this->currentToken.st, this->currentToken.et
-                ));
+                // return result->Failure(new SyntaxError(
+                //     "Invilid dictionary definition",
+                //     this->currentToken.st, this->currentToken.et
+                // ));
+                return result;
             }
             if (this->currentToken.type != TokenType::Colon) {
                 return result->Failure(new SyntaxError(
@@ -2324,7 +2328,8 @@ public:
 
     ParseResult *FunctionDefinition() {
         auto result = new ParseResult;
-        this->insideAFunction = true;
+        // deprecated:  this->insideAFunction = true;
+        this->functionLayers++;
         if (!this->currentToken.Matches<std::string>(TokenType::Keyword, "function")) {
             return result->Failure(new SyntaxError(
                 "Expected 'function'", this->currentToken.st, this->currentToken.et
@@ -2431,7 +2436,8 @@ public:
         result->RegisterAdvance();
         this->Advance();
 
-        this->insideAFunction = false;
+        assert(functionLayers > 0);
+        this->functionLayers--;
         return result->Success(new FunctionDefinitionNode(funcNameToken, args, body, false));
     }
 
@@ -2447,7 +2453,8 @@ private:
     Token currentToken;
     Tokens tokens;
     int tokenIndex;
-    bool insideAFunction;
+    bool insideAFunction; // deprecated
+    int functionLayers;
 };
 
 
@@ -3207,6 +3214,8 @@ struct SymbolTable final {
 };
 
 struct String : public Object {
+    using ObjectWithError = std::pair<Object *, Error *>;
+
     static inline std::string Repeat(const std::string &s, int times) {
         std::string result;
         for (int i = 0; i < times; i++) {
@@ -3305,6 +3314,40 @@ struct String : public Object {
         if (nl) {
             o << std::endl;
         }
+    }
+
+    ObjectWithError Subsciption(Object *other) override {
+        if (other->typeName != std::string("Number")) {
+            return std::make_pair(nullptr, new TypeError(
+                "String index should be a number",
+                other->startPos, other->endPos, this->ctx 
+            ));
+        }
+
+        auto index = As<Number>(other);
+        if (!std::holds_alternative<int>(index->value)) {
+            return std::make_pair(nullptr, new TypeError(
+                "String index should be a positive integer",
+                other->startPos, other->endPos, this->ctx
+            ));
+        }
+
+        auto indexNum = std::get<int>(index->value);
+        if (indexNum < 0) {
+            return std::make_pair(nullptr, new TypeError(
+                "String index should be a positive integer",
+                other->startPos, other->endPos, this->ctx
+            ));
+        }
+
+        if (indexNum + 1 > this->s.length()) {
+            return std::make_pair(nullptr, new TypeError(
+                std::format("String index out of range (maximum is {} but got {})", this->s.length() - 1, indexNum),
+                other->startPos, other->endPos, this->ctx
+            ));
+        }
+
+        return std::make_pair(new String(std::string(1, this->s[indexNum])), nullptr);
     }
 
     ~String() = default;
@@ -3927,6 +3970,8 @@ struct ClassObject : public Dictionary {
         copy->BuildClass();
         return copy;
     }
+
+    Object *Instantiate(const std::vector<Object *> &args);
 };
 
 void Interprete(const std::string &, const std::string &, InterpreterStartMode, const std::string & = "", Context * = nullptr, Position *parentEntry = nullptr);
@@ -3936,8 +3981,16 @@ const std::vector<std::string> builtinNames {
     "sin", "cos", "tan", "abs", "log", "ln", "sqrt", "isFloating", "isInteger",
     "input", "import", "set", "require",
     "readFile", "writeFile", "append", "concat", "remove", "builtins", "panic", "del",
-    "range"
+    "range", "addressOf"
 };
+
+std::map<std::string, std::string> *envVars = nullptr;
+const std::map<std::string, std::string> requiredEnvVars = { 
+    { "native-lib-path", "lib/" },
+    { "builtins-import-path", "builtins/" },
+    { "version", YAN_LANG_VERSION }
+};
+
 
 namespace builtins {
     using YanArgumentListType = std::vector<Object *> &;
@@ -3945,6 +3998,77 @@ namespace builtins {
     using YanObject = RuntimeResult *;
     using BuiltinFunctionImplementation = std::function<RuntimeResult *(YanContext)>;
     
+    void AllocEnvVars() {
+        ::envVars = new std::map<std::string, std::string>;
+    }
+
+    bool HasEnvVar(const std::string &key) {
+        if (envVars == nullptr) {
+            std::cerr << "Fatal: Env has not been allocated, builtins::AllocEnv() should be called before operation" << std::endl;
+            assert(false);
+        }
+        return ::envVars->find(key) != ::envVars->end();
+    }
+
+    void SetEnvVar(const std::string &key, const std::string &val) {
+        if (envVars == nullptr) {
+            std::cerr << "Fatal: Env has not been allocated, builtins::AllocEnv() should be called before operation" << std::endl;
+            assert(false);
+        }
+        if (!HasEnvVar(key)) {
+            ::envVars->insert(std::make_pair(key, val));
+        } else {
+            (*::envVars)[key] = val;
+        }
+    }
+
+    std::string GetEnvVar(const std::string &key) {
+        if (envVars == nullptr) {
+            std::cerr << "Fatal: Env has not been allocated, builtins::AllocEnv() should be called before operation" << std::endl;
+            assert(false);
+        }
+        if (!HasEnvVar(key)) {
+            std::cerr << "Fatal: Invilid env key: " << key << std::endl;
+            assert(false);
+        }
+        return (*::envVars)[key];
+    }
+
+    // default
+    void RestoreEnvVar() {
+        if (envVars == nullptr) {
+            std::cerr << "Fatal: Env has not been allocated, builtins::AllocEnv() should be called before operation" << std::endl;
+            assert(false);
+        }
+        std::fstream file;
+        file.open("./env.def", std::ios::in);
+        std::string buf;
+
+        if (file.is_open()) {
+            while (std::getline(file, buf)) {
+                auto def = Split(buf, "=");
+                if (def.size() != 2) {
+                    std::cerr << "Fatal: Invilid env definition: " << buf << std::endl;
+                    assert(false); 
+                }
+
+                SetEnvVar(def[0], def[1]);
+            }      
+            file.close();        
+        }
+
+        for (auto [requiredKey, defaultVal] : requiredEnvVars) {
+            if (!HasEnvVar(requiredKey)) {
+                SetEnvVar(requiredKey, defaultVal);
+            }
+        }
+    }
+
+    std::map<std::string, std::string> GetVars() {
+        auto vars = *::envVars;
+        return vars;
+    }
+
     struct YanModule {
         YanModule(const std::string &moduleName) : moduleName(moduleName) {}
         YanModule *AddSymbol(const std::string &symbolName, std::vector<std::string> &&decl) {
@@ -4028,11 +4152,60 @@ namespace builtins {
         }
 
         YanObject WriteFile(YanContext ctx) {
-            auto arg = ctx->symbols->Get("_filename");
-            return (new RuntimeResult)->Failure(new RuntimeError(
-                "Not implemented: RuntimeResult *builtins::IO::WriteFile(builtins::YanContext)",
-                arg->startPos, arg->endPos, ctx
-            ));
+            auto result = new RuntimeResult;
+            auto arg1 = ctx->symbols->Get("_filename");
+            auto arg2 = ctx->symbols->Get("_str");
+            auto arg3 = ctx->symbols->Get("__mode__");
+            std::fstream fileStream;
+            std::ios_base::openmode mode;
+
+            if (arg3 != nullptr) {
+                if (arg3->typeName != std::string("String")) {
+                    return result->Failure(new TypeError(
+                        "File open mode should be a string",
+                        arg3->startPos, arg3->endPos, ctx
+                    ));
+                }
+                auto modeString = As<String>(arg3)->s;
+                if (modeString == "w") {
+                    mode = std::ios::out;
+                } else if (modeString == "wa") {
+                    mode = std::ios::out | std::ios::app;
+                } else {
+                    return result->Failure(new ValueError(
+                        std::format("Invilid file open mode: \'{}\'", modeString),
+                        arg3->startPos, arg3->endPos, ctx
+                    ));
+                }
+            } else {
+                mode = std::ios::out;
+            }
+
+            if (arg1->typeName != std::string("String")) {
+                return result->Failure(new TypeError(
+                    "Expected a path with string type",
+                    arg3->startPos, arg3->endPos, ctx
+                ));
+            }
+            if (arg2->typeName != std::string("String")) {
+                return result->Failure(new TypeError(
+                    "Content should be a string",
+                    arg2->startPos, arg2->endPos, ctx
+                ));
+            }
+
+            auto filePath = As<String>(arg1)->s;
+            auto content = As<String>(arg2)->s;
+            fileStream.open(filePath, mode);
+            if (!fileStream.is_open()) {
+                return result->Failure(new OSError(
+                    std::format("Failed to open file: '{}'", filePath),
+                    arg1->startPos, arg1->endPos, ctx
+                ));
+            }
+            fileStream << content;
+            fileStream.close();
+            return result->Success(Number::null);
         }
 
         YanObject Print(YanContext ctx) {
@@ -4337,10 +4510,14 @@ namespace builtins {
         std::ifstream ifs;
         ifs.open(moduleFile, std::ios::in);
         if (!ifs.is_open()) {
-            return result->Failure(new OSError(
-                std::format("Failed to open module: '{}'", moduleFile),
-                st, et, ctx
-            ));
+            ifs.clear();
+            ifs.open(std::format("{}/{}", GetEnvVar("builtins-import-path"), moduleFile), std::ios::in);
+            if (!ifs.is_open()) {
+                return result->Failure(new OSError(
+                    std::format("Failed to open module: '{}'", moduleFile),
+                    st, et, ctx
+                ));
+            }
         }
         std::ostringstream oss;
         oss << ifs.rdbuf();
@@ -4390,10 +4567,14 @@ namespace builtins {
         std::ifstream ifs;
         ifs.open(moduleFile, std::ios::in);
         if (!ifs.is_open()) {
-            return result->Failure(new OSError(
-                std::format("Failed to open module: '{}'", moduleFile),
-                st, et, ctx
-            ));
+            ifs.clear();
+            ifs.open(std::format("{}/{}", GetEnvVar("builtins-import-path"), moduleFile), std::ios::in);
+            if (!ifs.is_open()) {
+                return result->Failure(new OSError(
+                    std::format("Failed to open module: '{}'", moduleFile),
+                    st, et, ctx
+                ));
+            }
         }
         std::ostringstream oss;
         oss << ifs.rdbuf();
@@ -4431,10 +4612,14 @@ namespace builtins {
         std::ifstream ifs;
         ifs.open(moduleFile + ".yan", std::ios::in);
         if (!ifs.is_open()) {
-            return result->Failure(new OSError(
-                std::format("Failed to open module: '{}'", moduleFile),
-                st, et, ctx
-            ));
+             ifs.clear();
+            ifs.open(std::format("{}/{}", GetEnvVar("builtins-import-path"), moduleFile + ".yan"), std::ios::in);
+            if (!ifs.is_open()) {
+                return result->Failure(new OSError(
+                    std::format("Failed to open module: '{}'", moduleFile),
+                    st, et, ctx
+                ));
+            }
         }
         std::ostringstream oss;
         oss << ifs.rdbuf();
@@ -4644,6 +4829,12 @@ namespace builtins {
         delete var;
         return result->Success(Number::null);
     }
+
+    YanObject AddressOf(YanContext ctx) {
+        return (new RuntimeResult)->Success(
+            new String(std::format("{}", static_cast<void *>(ctx->symbols->Get("_object"))))
+        );
+    }
 }
 
 const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFuncIndexes {
@@ -4677,7 +4868,8 @@ const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFunc
     { "isFloating", builtins::Math::IsFloating },
     { "isInteger", builtins::Math::IsInteger },
     { "del", builtins::Del },
-    { "range", builtins::List_::Range }
+    { "range", builtins::List_::Range },
+    { "addressOf", builtins::AddressOf }
 };
 
 const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry {
@@ -4709,7 +4901,8 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
     { "isFloating", { "_num" } },
     { "isInteger", { "_num" } },
     { "del", { "_varName" } },
-    { "range", { "_a", "__b__", "__c__" } }
+    { "range", { "_a", "__b__", "__c__" } },
+    { "addressOf", { "_object" } }
 };
 
 #ifdef __linux__
@@ -4724,21 +4917,29 @@ std::map<std::string, builtins::YanModuleDeclearation> nativeModules;
 struct BuiltinFunction : public FunctionBase {
     explicit BuiltinFunction(const std::string &name) : FunctionBase(name), Object("BuiltinFunction") {}
     std::vector<std::string> argDeclearation;
+    bool dynamicBind = false;
+    builtins::BuiltinFunctionImplementation dynamicImpl = nullptr;
 
     RuntimeResult *Execute(std::vector<Object *> args) {
         auto result = new RuntimeResult;
         auto frameContext = this->GenerateNewContext();
         auto builtinFunctionName = this->functionName;
         builtins::BuiltinFunctionImplementation func;
-        if (builtinFuncIndexes.find(builtinFunctionName) == builtinFuncIndexes.end()) {
-            if (dynamicLoadedSymbol.find(builtinFunctionName) != dynamicLoadedSymbol.end()) {
-                func = (RuntimeResult *(*)(Context *)) dynamicLoadedSymbol.at(builtinFunctionName).second;
+        if (!this->dynamicBind) {
+            if (builtinFuncIndexes.find(builtinFunctionName) == builtinFuncIndexes.end()) {
+                if (dynamicLoadedSymbol.find(builtinFunctionName) != dynamicLoadedSymbol.end()) {
+                    func = (RuntimeResult *(*)(Context *)) dynamicLoadedSymbol.at(builtinFunctionName).second;
+                } else {
+                    func = builtins::Invilid;
+                }
             } else {
-                func = builtins::Invilid;
+                func = builtinFuncIndexes.at(builtinFunctionName);
             }
         } else {
-            func = builtinFuncIndexes.at(builtinFunctionName);
+            func = this->dynamicImpl;
         }
+        // std::cout << std::boolalpha << this->dynamicBind << std::endl;
+        assert(func != nullptr);
 
         if (builtinFuncParamsRegistry.find(builtinFunctionName) != builtinFuncParamsRegistry.end() && this->argDeclearation.size() == 0) {
             result->Register(this->CheckAndPopulate(builtinFuncParamsRegistry.at(builtinFunctionName), args, frameContext));
@@ -4754,6 +4955,18 @@ struct BuiltinFunction : public FunctionBase {
             return result;
         }
         return result->Success(returnValue);
+    }
+
+    void Bind(const std::vector<std::string> &argDeclearation, builtins::BuiltinFunctionImplementation impl) {
+        this->dynamicBind = true;
+        this->argDeclearation = argDeclearation;
+        this->dynamicImpl = impl;
+    }
+
+    void Unbind() {
+        this->dynamicBind = false;
+        this->argDeclearation.clear();
+        this->dynamicImpl = nullptr;
     }
 
     RuntimeResult *CheckArguments(const std::vector<std::string> &argNames, std::vector<Object *> &args) override {
@@ -4784,6 +4997,9 @@ struct BuiltinFunction : public FunctionBase {
         auto copy = new BuiltinFunction(this->functionName);
         copy->SetContext(this->ctx)->SetPos(this->startPos, this->endPos);
         copy->argDeclearation = this->argDeclearation;
+        if (this->dynamicBind) {
+            copy->Bind(this->argDeclearation, this->dynamicImpl);
+        }
         return copy;
     }
 
@@ -4791,6 +5007,80 @@ struct BuiltinFunction : public FunctionBase {
         return std::format("<builtin-function {} at {}>", this->functionName, (void *) this);
     }
 };
+
+struct BuiltinMethod : public BuiltinFunction {
+    Object *self;
+
+    static BuiltinMethod *FromBuiltinFunction(BuiltinFunction *bf, Object *self) {
+        auto m = new BuiltinMethod(bf->functionName);
+        m->SetPos(bf->startPos, bf->endPos);
+        m->SetContext(bf->ctx);
+        m->self = self;
+        m->Bind(bf->argDeclearation, bf->dynamicImpl);
+        return m;
+    }
+
+    explicit BuiltinMethod(const std::string &name)
+        : BuiltinFunction(name), Object("BuiltinMethod") {}
+
+    RuntimeResult *CheckArguments(const std::vector<std::string> &argNames, std::vector<Object *> &args) override {
+        auto result = new RuntimeResult;
+        if (args.size() + 1 != argNames.size()) {
+            return result->Failure(new RuntimeError(
+                std::format("Invilid arguments given to method '{}' (Expected {} but got {})", this->functionName, argNames.size() - 1, args.size()),
+                this->startPos, this->endPos, this->ctx
+            ));
+        }
+        return result->Success(nullptr);
+    }
+    
+    RuntimeResult *PopulateArguments(const std::vector<std::string> &argNames, std::vector<Object *> &args, Context *execCtx) override {
+        if (argNames.size() == 0) {
+            return BuiltinFunction::PopulateArguments(argNames, args, execCtx);
+        }
+
+        execCtx->symbols->Set(argNames[0], this->self);
+        std::vector<std::string> remain;
+        for (int i = 1; i < argNames.size(); i++) {
+            remain.push_back(argNames[i]);
+        }
+
+        return BuiltinFunction::PopulateArguments(remain, args, execCtx);
+    }
+
+    Object *Copy() override {
+        auto copiedMethod = new BuiltinMethod(this->functionName);
+        copiedMethod->self = this->self;
+        copiedMethod->SetContext(this->ctx);
+        copiedMethod->SetPos(this->startPos, this->endPos);
+        copiedMethod->argDeclearation = this->argDeclearation;
+        if (this->dynamicBind) {
+            copiedMethod->Bind(this->argDeclearation, this->dynamicImpl);
+        }
+        return copiedMethod;
+    }
+
+    inline std::string ToString() override {
+        return std::format("<bound-method {} at {} of object '{}' at {} (dynamically-binded)>", this->functionName, (void *) this, this->self->typeName, (void *) self);
+    }
+};
+
+Object *ClassObject::Instantiate(const std::vector<Object *> &args) {
+    auto result = new RuntimeResult;
+    auto object = As<ClassObject>(this->Copy());
+    object->isProto = false;
+    auto ctor = this->GetAttr("__init__");
+    assert(ctor.first != nullptr);
+    auto unboundedCtor = As<BuiltinFunction>(ctor.first);
+    auto boundedCtor = BuiltinMethod::FromBuiltinFunction(unboundedCtor, object);
+
+    result->Register(boundedCtor->Execute(args));
+    if (result->ShouldReturn()) {
+        std::cerr << "Internal interpreter error: " << result->error->name << ": " << result->error->details << std::endl;
+        assert(false);
+    }
+    return object;
+}
 
 std::map<std::string, BuiltinFunction *> allBuiltins {
     { "print", nullptr },
@@ -4820,7 +5110,8 @@ std::map<std::string, BuiltinFunction *> allBuiltins {
     { "remove", nullptr },
     { "builtins", nullptr },
     { "del", nullptr },
-    { "range", nullptr }
+    { "range", nullptr },
+    { "addressOf", nullptr }
 };
 
 DylibType OpenDynamicLibrary(const std::string &dylib) {
@@ -4828,16 +5119,23 @@ DylibType OpenDynamicLibrary(const std::string &dylib) {
     #ifdef __linux__
         auto descr = dlopen(std::format("./yan-{}.so", dylib).c_str(), RTLD_LAZY);
         if (descr == nullptr) {
-            std::cerr << "Fatal: Dynamic lib '" + dylib << "' opened failed: " << dlerror() << std::endl;
-            return nullptr;
+            descr = dlopen(std::format("{}/yan-{}.so", builtins::GetEnvVar("native-lib-path"), dylib).c_str(), RTLD_LAZY);
+            if (descr == nullptr) {
+                std::cerr << "Fatal: Dynamic lib '" + dylib << "' opened failed: " << dlerror() << std::endl;
+                return nullptr; 
+            }
         }
         return descr;
     #elif defined(_WIN32)
         auto s = std::format(".\\yan-{}.dll", dylib).c_str();
         auto dll = win32::LoadLibrary(s);
         if (dll == nullptr) {
-            std::cerr << "Fatal: Dynamic lib '" + dylib << "' opened failed: [WinError " << win32::GetLastError() << "]" << std::endl;
-            return nullptr;
+            s = std::format("{}\\yan-{}.dll", builtins::GetEnvVar("native-lib-path"), dylib).c_str();
+            dll = win32::LoadLibrary(s);
+            if (dll == nullptr) {
+                std::cerr << "Fatal: Dynamic lib '" + dylib << "' opened failed: [WinError " << win32::GetLastError() << "]" << std::endl;
+                return nullptr;
+            }
         }
         return dll;
     #else
@@ -4887,7 +5185,7 @@ auto LoadNativeFunctionImplementation(const std::string &dynamicLib, const std::
         #ifdef __linux__
             symbol = dlsym(dylib, "YanModule_OnLoad");
             if (symbol == nullptr) {
-                std::cerr << "Fatal: Error locating onLoad() function of '" + dynamicLib + "'" <<std::endl;
+                std::cerr << "Fatal: Error locating onLoad() function of '" + dynamicLib + "'" << std::endl;
                 return nullptr;
             }
         #elif defined(_WIN32)
@@ -5107,7 +5405,7 @@ RuntimeResult *Interpreter::VisitVarAccessNode(NodeBase *node, Context *ctx) {
 
     // Object *oldValue = value;
     // mutable types & immutable types ? 
-    if (value->typeName != "List" && value->typeName != "Dictionary" && value->typeName != "ClassObject") {
+    if (value->typeName != std::string("List") && value->typeName != std::string("Dictionary") && value->typeName != std::string("ClassObject")) {
         value = value->Copy()->SetPos(nd->st, nd->et)->SetContext(ctx);
     } else {
         value = value->SetPos(nd->st, nd->et)->SetContext(ctx);
@@ -5358,7 +5656,7 @@ RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
         }
     }
     
-    if (functionTarget->typeName != "Function" && functionTarget->typeName != "BuiltinFunction" && functionTarget->typeName != "Method" && functionTarget->typeName != "ClassObject") {
+    if (functionTarget->typeName != "Function" && functionTarget->typeName != "BuiltinFunction" && functionTarget->typeName != "Method" && functionTarget->typeName != "ClassObject" && functionTarget->typeName != std::string("BuiltinMethod")) {
         return result->Failure(new TypeError(
             std::format("'{}' object is not callable", functionTarget->typeName),
             node->st, node->et, ctx
@@ -5403,11 +5701,21 @@ RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
         } else if (functionTarget->typeName == "ClassObject") {
             return result->Success(functionTarget);
         } else {
-            auto returnValueTmp = result->Register((dynamic_cast<Method *>(functionTarget))->Execute(args));
-            if (result->ShouldReturn()) {
-                return result;
+            if (functionTarget->typeName == "Method") {
+                auto returnValueTmp = result->Register((dynamic_cast<Method *>(functionTarget))->Execute(args));
+                if (result->ShouldReturn()) {
+                    return result;
+                }
+                returnValue = returnValueTmp;
+            } else if (functionTarget->typeName == std::string("BuiltinMethod")) {
+                auto returnValueTmp = result->Register((dynamic_cast<BuiltinFunction *>(functionTarget))->Execute(args));
+                if (result->ShouldReturn()) {
+                    return result;
+                }
+                returnValue = returnValueTmp;
+            } else {
+                assert(false);
             }
-            returnValue = returnValueTmp;
         }
         
         currentCallStackDepth--;
@@ -5669,10 +5977,12 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
 
         if (attrNode->subAttrs.size() == 0) {
             if (v.first->typeName == "Function") {
-                if (As<Function>(v.first)->parameters[0] == "self" || As<Function>(v.first)->parameters[0] == "this") {
-                    auto method = Method::FromFunction(As<Function>(v.first), var, attr);    
-                    return result->Success(method); 
-                }          
+                if (As<Function>(v.first)->parameters.size() > 0) {
+                    if (As<Function>(v.first)->parameters[0] == "self" || As<Function>(v.first)->parameters[0] == "this") {
+                        auto method = Method::FromFunction(As<Function>(v.first), var, attr);    
+                        return result->Success(method); 
+                    }
+                }       
             }
             return result->Success(v.first);
         }
@@ -5827,6 +6137,9 @@ void Initialize() {
     globalSymbolTable->Set("null", Number::null);
     InitializeBuiltins();
     SetBuiltins(globalSymbolTable);
+
+    builtins::AllocEnvVars();
+    builtins::RestoreEnvVar();
 }
 
 bool startAsShell = false;
@@ -5971,6 +6284,10 @@ void Finalize() {
 
     for (auto [_, dylib] : dylibs) {
         #ifdef __linux__
+            auto moduleFinalizer = dlsym(dylib, "Yan_OnDestroy");
+            if (moduleFinalizer != nullptr) {
+                ((void (*)()) moduleFinalizer)();
+            }
             dlclose(dylib);
         #elif defined(_WIN32)
             ;
@@ -5980,6 +6297,8 @@ void Finalize() {
     for (auto [_, mod] : nativeModules) {
         delete mod;
     }
+
+    delete envVars;
 }
 
 void InterpreteFile(const std::string &filename) {

@@ -1,0 +1,12 @@
+function f()
+    var i = 0
+    function g()
+        var i = 1
+        println(i)
+    end
+    println(i)
+    println(g)
+    return g()
+end
+
+f()

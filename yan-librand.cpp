@@ -40,9 +40,6 @@ YAN_C_API_START builtins::YanObject RandInt(builtins::YanContext ctx) {
         ));
     }
 
-    return result->Failure(new RuntimeError(
-        "Not implemented",
-        a->startPos, b->endPos, ctx
-    ));
+    return result->Success(new Number(rand() % builtins::Math::GetInt(b) + builtins::Math::GetInt(a)));
 }
 YAN_C_API_END
