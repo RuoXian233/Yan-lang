@@ -1,10 +1,8 @@
 var mod = import('math.imod')
 
-function open(file) -> readFile(file)
 
-function _isOdd(n)
-    return mod(n, 2) == 1
-end
+function _isOdd(n) -> mod(n, 2) == 1
+
 
 function Dict(keys, values)
     var dict = []

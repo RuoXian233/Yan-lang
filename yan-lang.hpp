@@ -20,6 +20,8 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <chrono>
+
 
 const char *YAN_LANG_VERSION = "2.0";
 const char *TOKEN_TYPE_TAGS[] {"Int", "Float", "OP_Plus", "OP_Minus", "OP_Mul", "OP_Div", "OP_Pow", 
@@ -3087,6 +3089,7 @@ struct RuntimeResult final {
     bool shouldBreak;
 
     std::vector<RuntimeResult *> *resultCache;
+    Error *cause;
 
     void Reset() {
         this->value = nullptr;
@@ -3094,6 +3097,7 @@ struct RuntimeResult final {
         this->shouldContinue = false;
         this->shouldBreak = false;
         this->funcReturnValue = nullptr;
+        this->cause = nullptr;
     }
 
     explicit RuntimeResult() : error(nullptr) {
@@ -3109,7 +3113,18 @@ struct RuntimeResult final {
         this->funcReturnValue = res->funcReturnValue;
         this->shouldContinue = res->shouldContinue;
         this->shouldBreak = res->shouldBreak;
+        this->cause = res->cause;
         return res->value;
+    }
+
+    void SetCause(Error *err) {
+        if (err != nullptr) {
+            this->cause = err;
+        }
+    }
+
+    void ClearCause() {
+        this->cause = nullptr;
     }
 
     RuntimeResult *Success(Object *value) {
@@ -3136,9 +3151,10 @@ struct RuntimeResult final {
         return this;
     }
 
-    RuntimeResult *Failure(Error *err) {
+    RuntimeResult *Failure(Error *err, Error *cause = nullptr) {
         this->Reset();
         this->error = err;
+        this->SetCause(cause);
         return this; 
     }
 
@@ -3864,6 +3880,53 @@ struct Function : public FunctionBase {
     }
 };
 
+
+struct ClassObject : public Dictionary {
+    explicit ClassObject(const std::map<Object *, Object *> &elements) : Dictionary(elements) {}
+    std::string className;
+    bool isProto = true;
+
+    RuntimeResult *BuildClass() {
+        auto result = new RuntimeResult;
+        auto [className, error] = this->GetAttr("__cls__");
+        if (error != nullptr) {
+            return result->Failure(new ValueError(
+                "Class prototype without an '__cls__' attribute",
+                this->startPos, this->endPos, this->ctx
+            ));
+        }
+        if (className->typeName != "String") {
+            return result->Failure(new TypeError(
+                std::format("Invilid type for '__cls__': '{}'", className->typeName),
+                this->startPos, this->endPos, this->ctx
+            ));
+        }
+        this->className = As<String>(className)->s.c_str();
+        this->typeName = "ClassObject";
+        return result->Success(nullptr);
+    }
+
+
+    inline std::string ToString() override {
+        if (isProto) {
+            return std::format("<Prototype of object '{}' at {}>", this->className, (void *) this);
+        } else {
+            return std::format("{} {}", this->className, StringifyMapping(this->elements, "__", "__"));
+        }
+    }
+
+    Object *Copy() override {
+        auto copy = new ClassObject(this->elements);
+        copy->className = this->className;
+        copy->isProto = this->isProto;
+        copy->SetContext(this->ctx)->SetPos(this->startPos, this->endPos);
+        copy->BuildClass();
+        return copy;
+    }
+
+    Object *Instantiate(const std::vector<Object *> &args);
+};
+
 struct Method : public Function {
     Object *self;
 
@@ -3924,55 +3987,16 @@ struct Method : public Function {
     }
 
     inline std::string ToString() override {
-        return std::format("<bound-method {} at {} of object '{}' at {}>", this->functionName, (void *) this, this->self->typeName, (void *) self);
-    }
-};
-
-struct ClassObject : public Dictionary {
-    explicit ClassObject(const std::map<Object *, Object *> &elements) : Dictionary(elements) {}
-    std::string className;
-    bool isProto = true;
-
-    RuntimeResult *BuildClass() {
-        auto result = new RuntimeResult;
-        auto [className, error] = this->GetAttr("__cls__");
-        if (error != nullptr) {
-            return result->Failure(new ValueError(
-                "Class prototype without an '__cls__' attribute",
-                this->startPos, this->endPos, this->ctx
-            ));
-        }
-        if (className->typeName != "String") {
-            return result->Failure(new TypeError(
-                std::format("Invilid type for '__cls__': '{}'", className->typeName),
-                this->startPos, this->endPos, this->ctx
-            ));
-        }
-        this->className = As<String>(className)->s.c_str();
-        this->typeName = "ClassObject";
-        return result->Success(nullptr);
-    }
-
-
-    inline std::string ToString() override {
-        if (isProto) {
-            return std::format("<Prototype of object '{}' at {}>", this->className, (void *) this);
+        std::string tpName;
+        if (this->self->typeName == std::string("ClassObject")) {
+            tpName = As<ClassObject>(this->self)->className;
         } else {
-            return std::format("{} {}", this->className, StringifyMapping(this->elements, "__", "__"));
+            tpName = this->self->typeName;
         }
+        return std::format("<bound-method {} at {} of object '{}' at {}>", this->functionName, (void *) this, tpName, (void *) self);
     }
-
-    Object *Copy() override {
-        auto copy = new ClassObject(this->elements);
-        copy->className = this->className;
-        copy->isProto = this->isProto;
-        copy->SetContext(this->ctx)->SetPos(this->startPos, this->endPos);
-        copy->BuildClass();
-        return copy;
-    }
-
-    Object *Instantiate(const std::vector<Object *> &args);
 };
+
 
 void Interprete(const std::string &, const std::string &, InterpreterStartMode, const std::string & = "", Context * = nullptr, Position *parentEntry = nullptr);
 void SetBuiltins(SymbolTable *global);
@@ -4088,10 +4112,9 @@ namespace builtins {
     using ModuleLoaderFunc = YanModuleDeclearation (*)();
 
     
-    YanObject Invilid(YanContext ctx) {
-        std::cerr << "Internal interpreter error: Unknown builtin access" << std::endl;
+    [[noreturn]] YanObject Invilid(YanContext ctx) {
+        std::cerr << "Fatal: Unknown builtin access" << std::endl;
         assert(false);
-        return nullptr;
     }
 
     Error *AssertYanTypeMatches(YanContext ctx, Object *obj, const std::string &argName, const std::vector<std::string> &validTypes) {
@@ -4598,7 +4621,7 @@ namespace builtins {
         moduleContextCache.insert(std::make_pair(moduleFile, moduleContext));
 
         for (auto &[symbolName, symbol] : moduleContext->symbols->symbols) {
-            if (symbol->typeName != "BuiltinFunction") {
+            if (symbol->typeName != "BuiltinFunction" || !Lexer::Contains(builtinNames, symbolName)) {
                 dest->symbols->Set(symbolName, symbol->Copy());
                 symbolsModuleLocation.insert(std::make_pair(symbolName, moduleFile));
             }
@@ -4644,7 +4667,7 @@ namespace builtins {
 
         std::map<Object *, Object *> moduleSymbols;
         for (auto &[symbolName, symbol] : moduleContext->symbols->symbols) {
-            if (symbol->typeName != "BuiltinFunction") {
+            if (symbol->typeName != "BuiltinFunction" || !Lexer::Contains(builtinNames, symbolName)) {
                 moduleSymbols.insert(std::make_pair(new String(symbolName), symbol));
                 symbolsModuleLocation.insert(std::make_pair(symbolName, moduleFile));
             }
@@ -5004,7 +5027,11 @@ struct BuiltinFunction : public FunctionBase {
     }
 
     inline std::string ToString() override {
-        return std::format("<builtin-function {} at {}>", this->functionName, (void *) this);
+        if (!this->dynamicBind) {
+            return std::format("<builtin-function {} at {}>", this->functionName, (void *) this);
+        } else {
+            return std::format("<native-function {} at {}>", this->functionName, (void *) this);
+        }
     }
 };
 
@@ -5061,7 +5088,13 @@ struct BuiltinMethod : public BuiltinFunction {
     }
 
     inline std::string ToString() override {
-        return std::format("<bound-method {} at {} of object '{}' at {} (dynamically-binded)>", this->functionName, (void *) this, this->self->typeName, (void *) self);
+        std::string tpName;
+        if (this->self->typeName == std::string("ClassObject")) {
+            tpName = As<ClassObject>(this->self)->className;
+        } else {
+            tpName = this->self->typeName;
+        }
+        return std::format("<bound-method {} at {} of object '{}' at {} (dynamically-binded)>", this->functionName, (void *) this, tpName, (void *) self);
     }
 };
 
@@ -6123,7 +6156,8 @@ RuntimeResult *Interpreter::VisitNewExpression(NodeBase *node, Context *ctx) {
 }
 
 [[noreturn]] RuntimeResult *Interpreter::VisitEmpty(NodeBase *node, Context *ctx) {
-    throw std::runtime_error("Invilid node");
+    std::cerr << "Fatal: Invilid node" << std::endl;
+    assert(false);
 }
 
 Interpreter::~Interpreter() = default;
@@ -6180,8 +6214,15 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
     }
     auto n = interpreter->Visit(parseResult->ast, context);
     if (n->error != nullptr) {
-        std::cerr << n->error->ToString() << std::endl;
-        return;
+        if (n->cause == nullptr) {
+            std::cerr << n->error->ToString() << std::endl;
+            return; 
+        } else {
+            std::cerr << n->cause->ToString() << std::endl;
+            std::cerr << std::endl << "Above exception is the direct cause of the following exception: " << std::endl << std::endl;
+            std::cerr << n->error->ToString() << std::endl;
+            return;
+        }
     }
 
     if (n->value != nullptr) {
