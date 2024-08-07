@@ -1,2 +1,2 @@
-var rand = require('@rand.Random')
+var random = require('@rand.Random')
 var randint = require('@rand.RandInt')

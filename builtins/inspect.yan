@@ -1,0 +1,42 @@
+import('string')
+
+var _getNativeCallStackInfo = require('@inspect.GetNativeCallStackInfo')
+var CallStackInfo = require('@inspect.GetCallStackInfo')
+
+
+function CallStackInfo_init(this, id, content, addr)	
+	this.id = parseInt(string.sub(id, 1, len(id) - 1))
+	this.__content = content
+	this.addr = addr
+
+	function CallStackInfo_extract(this)
+		var main = string.split(this.__content, '(')
+		this.file = main[0]
+		this.func = string.sub(main[1], 0, len(main[1]) - 5)
+		this.addr = string.sub(this.addr, 1, len(this.addr) - 5)
+	end
+	this.extract = CallStackInfo_extract
+end
+
+var CallStackInfo = { '__cls__': 'CallStackInfo', '__init__': CallStackInfo_init }
+
+
+function parseNativeCallStackInfo(info)
+	var stack = []
+	for stackInfo in string.split(info, '\n') then
+		var info = string.split(stackInfo, ' ')
+		if len(info) == 3 then
+			append(stack, new CallStackInfo(info[0], info[1], info[2]))
+		elif len(info) > 3 then
+			continue
+		else
+			break
+		end
+	end
+
+	for s in stack then
+		s.extract()
+	end
+	return stack
+end
+

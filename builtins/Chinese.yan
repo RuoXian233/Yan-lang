@@ -1,0 +1,92 @@
+var 输出 = print
+var 换行输出 = println
+var 取类型 = typeof
+var 等待输入一行 = readLine
+var 等待输入 = input
+var 取长度 = len
+var 按整数 = parseInt
+var 按小数 = parseFloat
+var 按字符串 = str
+var 取值 = eval
+var 正弦 = sin
+var 余弦 = cos
+var 正切 = tan
+var 取绝对值 = abs
+var 取常用对数 = log
+var 取自然对数 = ln
+var 取平方根 = sqrt
+var 是否是整数 = isInteger
+var 是否是小数 = isFloating
+var 导入 = import
+var 装载 = require
+var 列表赋值 = set
+var 从文件读取 = readFile
+var 向文件写入 = writeFile
+var 列表添加项 = append
+var 列表拼接 = concat
+var 列表删除 = remove
+var 所有内建函数 = builtins
+var 异常终止 = panic
+var 移除 = del
+var 区间 = range
+var 取地址 = addressOf
+var 取映射键 = keys
+var 取映射值 = values
+var 全局 = global
+var 空值 = 0
+var 真 = 1
+var 假 = 空值
+var 类名 = '__cls__'
+var 构造器 = '__init__'
+
+import('fs')
+import('rand')
+import('math')
+import('string')
+
+var 随机数 = {}
+随机数.获取 = rand.random
+随机数.获取整数 = rand.randint
+
+var 字符串 = {}
+字符串.分割 = string.split
+字符串.格式化 = string.format
+字符串.转字符数组 = string.toCharArray
+字符串.子串 = string.sub
+字符串.查找替换 = string.replace
+
+var 数学 = {}
+数学.圆周率 = math.pi
+数学.自然对数的底 = math.e
+数学.阶乘 = math.factorial
+数学.向上取整 = math.ceil
+数学.向下取整 = math.floor
+数学.二项式系数 = math.comb
+数学.求和 = math.sum
+数学.整数求余 = math.imod
+数学.取较大 = math.max
+数学.取较小 = math.min
+数学.最大公约数 = math.gcd
+数学.最小公倍数 = math.lcm
+数学.组合数 = math.perm
+数学.类指数 = math.ldexpr
+数学.反自然对数 = math.exp
+数学.二进制指数 = math.exp2
+数学.立方根 = math.cbrt
+数学.幂 = math.pow
+数学.求内积 = math.product
+数学.近似相等 = math.isClose
+数学.求距离 = math.dist 
+
+var 文件 = {}
+文件.打开 = fs.open 
+文件.关闭 = fs.close  
+文件.是否存在 = fs.exists  
+文件.获取剩余空间 = fs.getFreeSpace  
+文件.获取权限 = fs.getFilePermissions
+文件.获取类型 = fs.getFileType
+文件.获取大小 = fs.getFileSize
+文件.获取读写时间 = fs.getLastWriteTime
+文件.获取链接数 = fs.getHardLinksCount
+文件.遍历目录 = fs.listDirectory
+文件.按字符串格式化 = fs.formatSize 

@@ -5,6 +5,27 @@
 #define YAN_C_API_START extern "C" {
 #define YAN_C_API_END }
 #define YAN_CONTEXT_DECORATION(current) ctx->ctxLabel = std::format("@{}." #current " (aka '{}')", moduleName, ctx->ctxLabel)
+#define YAN_METHOD_CONTEXT_DECORATION(name) ctx->ctxLabel = std::format("{}.{}", this->className, name)
+// deprecated macro
+#define YAN_INITIALIZE_CALL_STACK_INFO() 
+// deprecated 
+
+#define RESET "\033[0m"
+#define BLACK "\033[30m"  /* Black */
+#define RED "\033[31m"    /* Red */
+#define GREEN "\033[32m"  /* Green */
+#define YELLOW "\033[33m" /* Yellow */
+#define BLUE "\033[34m"   /* Blue */
+#define PURPLE "\033[35m" /* Purple */
+#define CYAN "\033[36m"   /* Cyan */
+#define WHITE "\033[37m"  /* White */
+#define BOLD_WHITE "\033[1;37m"
+
+#define NORMAL() (std::cout << RESET)
+#define INFO() (std::cout << GREEN)
+#define WARN() (std::cout << YELLOW)
+#define ERROR() (std::cout << RED)
+#define DEBUG() (std::cout << CYAN)
 
 
 #include <cstring>
@@ -21,14 +42,19 @@
 #include <map>
 #include <memory>
 #include <chrono>
+#include <algorithm>
+#include <cstdio>
+#include <locale>
+#include <codecvt>
 
 
 const char *YAN_LANG_VERSION = "2.0";
 const char *TOKEN_TYPE_TAGS[] {"Int", "Float", "OP_Plus", "OP_Minus", "OP_Mul", "OP_Div", "OP_Pow", 
                             "Lparen", "Rparen", "LSquare", "RSquare", "Identifier", "Keyword", 
-                            "OP_Eq", "OP_Equal", "OP_Nequal", "OP_Lt", "OP_Gt", "OP_Lte", "OP_Gte", "Comma", "Arrow", "String", "Newline", "Dot", "Colon", "LStart", "RStart"
+                            "OP_Eq", "OP_Equal", "OP_Nequal", "OP_Lt", "OP_Gt", "OP_Lte", "OP_Gte", "Comma", "Arrow", "String", "Newline", "Dot", "Colon", "LStart", "RStart",
                              "Invilid", "EOF"};
 const std::string EOF_ = "EOF";
+const std::wstring EOFW_ = L"EOF";
 const std::vector<std::string> SPACES { " ", "\t" };
 const std::vector<std::string> DIGITS { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 const std::vector<std::string> LETTERS {
@@ -43,7 +69,8 @@ const std::vector<std::string> LETTERS_WITH_DIGITS {
 };
 
 const std::vector<std::string> KEYWORDS {
-    "var", "and", "or", "not", "if", "elif", "then", "else", "for", "while", "step", "to", "function", "end", "return", "continue", "break", "in", "new"
+    "var", "and", "or", "not", "if", "elif", "then", "else", "for", "while", "step", "to", "function", "end", "return", "continue", "break", "in", "new", "nonlocal",
+    "defer"
 };
 
 const std::vector<std::string> STATEMENT_SEPERATORS {
@@ -71,7 +98,9 @@ const std::map<std::string, std::string> REVERSED_ESCAPE_CHARACTERS {
 #endif
 
 #ifdef __GNUC__
+    #ifndef __clang__
     const std::string compilerInfo = std::format("[GCC {}.{} ({})]", __GNUC__, __GNUC_PATCHLEVEL__, platformInfo);
+    #endif
 #endif
 
 #ifdef _MSC_VER
@@ -81,10 +110,13 @@ const std::map<std::string, std::string> REVERSED_ESCAPE_CHARACTERS {
 #ifdef _WIN32
     namespace win32 {
         #include <windows.h>
+        #include <dbghelp.h>
     }
     const char *platform = "win32";
 #elif defined(__linux__)
     #include <dlfcn.h>
+    #include <execinfo.h>
+    #include <cxxabi.h>
     const char *platform = "linux";
 #elif defined(__APPLE__)
     const char *platform = "darwin"
@@ -94,8 +126,10 @@ const std::map<std::string, std::string> REVERSED_ESCAPE_CHARACTERS {
 
 const std::string compilationTimeStamp = std::format("({}, {})", __DATE__, __TIME__);
 bool debug = false;
-const unsigned MAX_CALLSTACK_DEPTH = 30;
-unsigned currentCallStackDepth = 0;
+const unsigned MAX_CALLSTACK_DEPTH = 50;
+long currentCallStackDepth = 0;
+unsigned overflowCount = 0;
+const unsigned INVILID_OVERFLOW_TOLERANCE = 10;
 
 
 enum class TokenType {
@@ -138,6 +172,33 @@ const std::vector<TokenType> OPERANDS { TokenType::OP_Mul, TokenType::OP_Div, To
 const std::vector<TokenType> THIRD_LEVEL_OPERAND { TokenType::OP_Pow };
 const std::vector<std::pair<TokenType, std::string>> LOGIC_OPERANDS { { TokenType::Keyword, "and" }, { TokenType::Keyword, "or" }, { TokenType::Keyword, "not" } };
 const std::vector<TokenType> COMPARE_OPERANDS { TokenType::OP_Equal, TokenType::OP_Nequal, TokenType::OP_Gt, TokenType::OP_Lt, TokenType::OP_Gte, TokenType::OP_Lte };
+
+
+inline std::wstring ToWideString(const std::string& input) {
+    try {
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+        return converter.from_bytes(input);
+    } catch (std::range_error &re) {
+        std::cerr << "Fatal: Input string '" << input << "' contains invilid character(s)" << std::endl;
+        return L"0";
+    }
+}
+
+inline std::string ToByteString(const std::wstring& input) {
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+    return converter.to_bytes(input);
+}
+
+
+std::string DemangleSymbol(const char *symbol) {
+    const std::unique_ptr<char, decltype(&free)> demangled(abi::__cxa_demangle(symbol, 0, 0, 0), &free);
+    if (demangled) {
+        return demangled.get();
+    }
+    else {
+        return symbol;
+	}
+}
 
 
 template<typename T>
@@ -202,10 +263,10 @@ struct Position {
     Position(int idx, int ln, int col, const std::string &fn, const std::string &text) :
     index(idx), line(ln), column(col), filename(fn), fileContent(text) {}
     
-    inline Position *Advance(const std::string &ch = "") {
+    inline Position *Advance(const std::wstring &ch = L"") {
         this->index++;
         this->column++;
-        if (ch == "\n") {
+        if (ch == L"\n") {
             this->line++;
             this->column = 0;
         }
@@ -223,6 +284,8 @@ struct Position {
 
 
 struct SymbolTable;
+struct NodeBase;
+class Interpreter;
 SymbolTable *globalSymbolTable;
 
 struct Context final {
@@ -231,9 +294,16 @@ struct Context final {
     Position *parentEntry;
     SymbolTable *symbols;
     SymbolTable *global;
+    SymbolTable *nonlocals;
+    std::vector<NodeBase *> deferNodes;
+    Interpreter *interpreter;
+
     explicit Context(const std::string &ctxName, Context *parent = nullptr, Position *parentEntry = nullptr) : ctxLabel(ctxName),
         parent(parent), parentEntry(parentEntry)
     {
+        if (this->parent && this->parent->interpreter) {
+            this->interpreter = this->parent->interpreter;
+        }
         this->SetGlobalSymbolTable(globalSymbolTable);
     }
 
@@ -301,19 +371,44 @@ std::string SubReplace(const std::string &resource_str, const std::string &sub_s
 
 static inline std::vector<std::string> Split(const std::string &str, const std::string &splitter) {
     std::vector<std::string> tokens;
-    char *src = new char[str.length() + 1];
-    strcpy(src, str.c_str());
+    // if (str != splitter && str.length() >= splitter.length()) {
+    //     char *src = new char[str.length() + 1];
+    //     strcpy(src, str.c_str());
 
-    char *token = strtok(src, splitter.c_str());
-    tokens.push_back(std::string(token));
-    while (true) {
-        token = strtok(nullptr, splitter.c_str());
-        if (token == nullptr) {
-            break;
+    //     char *token = strtok(src, splitter.c_str());
+    //     tokens.push_back(std::string(token));
+    //     while (true) {
+    //         token = strtok(nullptr, splitter.c_str());
+    //         if (token == nullptr) {
+    //             break;
+    //         }
+    //         tokens.push_back(std::string(token));
+    //     }
+    //     return tokens;
+    // } else {
+    //     tokens.push_back(str);
+    //     return tokens;
+    // }
+    if (str != splitter && str.length() >= splitter.length()) {
+        std::wstring wsplitter = ToWideString(splitter);        
+        std::wstring wstr = ToWideString(str);
+        wstr += wsplitter;
+
+        size_t pos = wstr.find(wsplitter);
+        int step = wsplitter.length();
+
+        while (pos != wstr.npos) {
+            std::wstring temp = wstr.substr(0, pos);
+            tokens.emplace_back(ToByteString(temp));
+            wstr = wstr.substr(pos + step, wstr.length());
+            pos = wstr.find(wsplitter);
+        
         }
-        tokens.push_back(std::string(token));
+        return tokens;
+    } else {
+        tokens.push_back(str);
+        return tokens;
     }
-    return tokens;
 }
 
 
@@ -389,15 +484,15 @@ public:
     }
 
     virtual std::string GenerateTraceBack() {
-        std::string result = "";
+        std::string result = "Stack Traceback:\n";
         auto pos = this->st;
         auto rt = this->ctx;
         if (rt == nullptr) {
-            return "  StackTrace: [U] ?? (not avalible)";
+            return "Stack Traceback:\n  [U] ?? (not avalible)";
         }
         while (rt != nullptr) {
             // result += std::format("  at {}  [{}:{}] <+{}>\n", rt->ctxLabel, pos->filename, pos->line + 1, (void *) pos);
-            result += std::format("  at {} [{}:{}]\n", rt->ctxLabel, pos->filename, pos->line + 1);
+            result += std::format("  at {}{}{} [{}{}{}:{}:{}]\n", CYAN, rt->ctxLabel, RESET, YELLOW, pos->filename, RESET, pos->line + 1, pos->column + 1);
             pos = rt->parentEntry;
             rt = rt->parent;
         }
@@ -411,11 +506,90 @@ public:
         // Fix me: Error content display
         auto basicErrorInfo = std::format("{}: {}", this->name, this->details);
         auto traceback = this->GenerateTraceBack();
-        return std::format("{}\n{}", basicErrorInfo, traceback);
+        try {
+            auto possibleSource = ToWideString(Split(this->st->fileContent, "\n")[this->st->line]);
+            std::wstringstream wss;
+            const auto red = ToWideString(RED);
+            const auto reset = ToWideString(RESET);
+            int col = 0;
+
+            for (auto c : possibleSource) {
+                if (col == this->st->column) {
+                    wss << ToWideString(RED);
+                }
+                wss << c;
+                col++;
+            }
+            possibleSource = wss.str() + reset;
+            return std::format("{}{}{}\n  (Possibly related source: `{}{}{}`)\n{}", RED, basicErrorInfo, RESET, BOLD_WHITE, ToByteString(possibleSource), RESET, traceback);    
+        } catch (std::exception &e) {
+            return std::format("{}{}{}\n  {}{}{}\n{}", RED, basicErrorInfo, RESET, BOLD_WHITE, "(Source is not avaliable)", RESET, traceback);
+        }
+    }
+
+    static std::string GetNativeCallStackInfo(bool demangle = true, bool colored = true) {
+        std::stringstream ss;
+        void* addresses[256];
+        const int n = backtrace(addresses, std::extent<decltype(addresses)>::value);
+        const std::unique_ptr<char*, decltype(&free)> symbols(backtrace_symbols(addresses, n), &free);
+        for (int i = 0; i < n; i++) {
+            char *symbol = symbols.get()[i];
+            char *end = symbol;
+
+            // demangle 
+            if (demangle) {
+                int p = 0;
+                int q = 0;
+                while (*end) {
+                    ++end;
+                }
+                while (end != symbol && *end != '+') {
+                    --end;
+                }
+                char *begin = end;
+                while (begin != symbol && *begin != '(') {
+                    --begin;
+                }
+
+                if (begin != symbol) {
+                    auto str1 = std::string(symbol, ++begin - symbol);
+                    *end++ = '\0';
+                    std::string result = str1 + DemangleSymbol(begin) + '+' + end;
+                    ss << "#" << i + 1 << ": " << result << std::endl;
+                }
+                else {
+                    ss << "#" << i + 1 << ": " << symbol << std::endl;
+                }
+            } else {
+                ss << "#" << i + 1 << ": " << symbol << std::endl;
+            }
+        }
+        
+        auto r = ss.str();
+        std::stringstream rs;
+        for (auto &&c : std::move(r)) {
+            rs << c;            
+            if (colored) {
+                if (c == '(') {
+                    rs << CYAN;
+                } else if (c == ')') {
+                    rs << RESET;
+                } else if (c == '[') {
+                    rs << GREEN;
+                } else if(c == ']') {
+                    rs << RESET;
+                }
+            } 
+        }
+        return rs.str();
     }
 
     inline Context *GetContext() {
         return this->ctx;
+    }
+
+    inline void SetContext(Context *ctx) {
+        this->ctx = ctx;
     }
 
 private:
@@ -452,15 +626,22 @@ public:
         RuntimeError("AttributeError", details, st, et, ctx) {}
 };
 
+class StopIteration : public RuntimeError {
+public:
+    explicit StopIteration() : StopIteration(nullptr, nullptr, nullptr) {}
+    explicit StopIteration(Position *st, Position *et, Context *ctx) :
+        RuntimeError("StopIteration", "",  st, et, ctx) {}
+};
+
 
 class Lexer final {
 public:
-    explicit Lexer(const std::string &filename, const std::string &t) : 
-    text(t), filename(filename), pos(new Position(-1, 0, -1, filename, text)) {
+    explicit Lexer(const std::string &filename, const std::wstring &t) : 
+    text(t), filename(filename), pos(new Position(-1, 0, -1, filename, ToByteString(text))) {
         this->Advance();
     }
 
-    static inline std::string CharAt(const std::string &s, unsigned index) {
+    static inline std::wstring CharAt(const std::wstring &s, unsigned index) {
         return s.substr(index, 1);
     }
 
@@ -516,7 +697,7 @@ public:
 
     void Advance() {
         this->pos->Advance(this->currentChar);
-        this->currentChar = this->pos->index < (int) this->text.length() ? Lexer::CharAt(this->text, this->pos->index) : EOF_;
+        this->currentChar = this->pos->index < (int) this->text.length() ? Lexer::CharAt(this->text, this->pos->index) : ToWideString(EOF_);
     }
 
     Token MakeNumber() {
@@ -525,15 +706,15 @@ public:
         auto posStart = this->pos->Copy();
 
 
-        while (this->currentChar != EOF_ && (Lexer::Contains(DIGITS, this->currentChar) || this->currentChar == ".")) {
-            if (this->currentChar == ".") {
+        while (this->currentChar != ToWideString(EOF_) && (Lexer::Contains(DIGITS, ToByteString(this->currentChar)) || this->currentChar == L".")) {
+            if (this->currentChar == L".") {
                 if (dots == 1) {
                     break;
                 }
                 dots++;
                 numberString += ".";
             } else {
-                numberString += this->currentChar;
+                numberString += ToByteString(this->currentChar);
             }
             this->Advance();
         }
@@ -552,23 +733,25 @@ public:
     }
 
     Token MakeIdentifier() {
-        std::string identifier;
+        std::wstring identifier;
         auto posStart = this->pos->Copy();
 
-        while (this->currentChar != EOF_ && ((Lexer::Contains(LETTERS_WITH_DIGITS, this->currentChar)) || this->currentChar == "_")) {
+        // while (this->currentChar != EOFW_ && ((Lexer::Contains(LETTERS_WITH_DIGITS, ToByteString(this->currentChar))) || this->currentChar == L"_")) {
+        while (this->currentChar != EOFW_ && this->currentChar != L"\n" && !Lexer::Contains(Lexer::OP, ToByteString(this->currentChar)) && !Lexer::Contains(SPACES, ToByteString(this->currentChar))) {
             identifier += this->currentChar;
             this->Advance();
         }
 
-        auto isKeyword = Lexer::Contains(KEYWORDS, identifier);
-        auto identifierLabel = new std::string(identifier);
+        auto bs = ToByteString(identifier);
+        auto isKeyword = Lexer::Contains(KEYWORDS, bs);
+        auto identifierLabel = new std::string(bs);
         return Token(isKeyword ? TokenType::Keyword : TokenType::Identifier, (void *) identifierLabel, posStart, this->pos);
     }
 
     std::pair<Token, Error *> MakeNeqToken() {
         auto posStart = this->pos->Copy();
         this->Advance();
-        if (this->currentChar == "=") {
+        if (this->currentChar == L"=") {
             this->Advance();
             return std::make_pair(Token(TokenType::OP_Nequal, nullptr, posStart, this->pos), nullptr);
         }
@@ -580,7 +763,7 @@ public:
         auto posStart = this->pos->Copy();
         TokenType tt = TokenType::OP_Eq;
         this->Advance();
-        if (this->currentChar == "=") {
+        if (this->currentChar == L"=") {
             this->Advance();
             tt = TokenType::OP_Equal;
         }
@@ -591,7 +774,7 @@ public:
         auto posStart = this->pos->Copy();
         TokenType tt = TokenType::OP_Lt;
         this->Advance();
-        if (this->currentChar == "=") {
+        if (this->currentChar == L"=") {
             this->Advance();
             tt = TokenType::OP_Lte;
         }
@@ -602,7 +785,7 @@ public:
         auto posStart = this->pos->Copy();
         TokenType tt = TokenType::OP_Gt;
         this->Advance();
-        if (this->currentChar == "=") {
+        if (this->currentChar == L"=") {
             this->Advance();
             tt = TokenType::OP_Gte;
         }
@@ -614,7 +797,7 @@ public:
         auto posStart = this->pos->Copy();
         this->Advance();
 
-        if (this->currentChar == ">") {
+        if (this->currentChar == L">") {
             this->Advance();
             ttype = TokenType::Arrow;
         }
@@ -627,31 +810,32 @@ public:
         bool escaped = false;
         this->Advance();
         /**/
-        if (this->currentChar == EOF_) {
+        if (this->currentChar == EOFW_) {
               return Token(TokenType::Invilid);
         }
 
-        while (this->currentChar != EOF_ && (this->currentChar != "'" || escaped)) {
+        while (this->currentChar != EOFW_ && (this->currentChar != L"'" || escaped)) {
+            auto wchar = ToByteString(this->currentChar);
             if (escaped) {
-                if (ESCAPED_CHARACTERS.find(this->currentChar) != ESCAPED_CHARACTERS.end()) {
-                    content += ESCAPED_CHARACTERS.at(this->currentChar);
+                if (ESCAPED_CHARACTERS.find(wchar) != ESCAPED_CHARACTERS.end()) {
+                    content += ESCAPED_CHARACTERS.at(wchar);
                 } else {
-                    content += this->currentChar;
+                    content += wchar;
                 }
             } else {
-                if (this->currentChar == "\\") {
+                if (this->currentChar == L"\\") {
                     escaped = true;
                     this->Advance();
                     continue;
                 } else {
-                    content += this->currentChar;
+                    content += wchar;
                 }
             }
             this->Advance();
             escaped = false;
         }
 
-        if (escaped && content.size() == 0 || this->currentChar == EOF_) {
+        if (escaped && content.size() == 0 || this->currentChar == EOFW_) {
             return Token(TokenType::Invilid);
         }
         this->Advance();
@@ -659,42 +843,47 @@ public:
         return Token(TokenType::String, (void *) str, posStart, this->pos);
     }
 
+    const std::vector<std::string> OP = {
+        " ", "$", "%", "&", "|", "\\", "+", "-", "*", "/", "^", ":", "[", "]", "{", "}", "(", ")", "'", "=", ">", "<", "!", ",", ";", ".", "?", "#", "@"
+    };
+
     std::pair<Tokens, Error*> MakeTokens() {
         Tokens tokens;
-        while (this->currentChar != EOF_) {
-            if (Lexer::Contains(SPACES, this->currentChar)) {
+        while (this->currentChar != ToWideString(EOF_)) {
+            if (Lexer::Contains(SPACES, ToByteString(this->currentChar))) {
                 this->Advance();
-            } else if (Lexer::Contains(STATEMENT_SEPERATORS, this->currentChar)) {
+            } else if (Lexer::Contains(STATEMENT_SEPERATORS, ToByteString(this->currentChar))) {
                 tokens.push_back(Token(TokenType::NewLine, nullptr, this->pos));
                 this->Advance();
-            } else if (Lexer::Contains(DIGITS, this->currentChar)) {
+            } else if (Lexer::Contains(DIGITS, ToByteString(this->currentChar))) {
                 tokens.push_back(this->MakeNumber());
-            } else if (Lexer::Contains(LETTERS, this->currentChar) || this->currentChar == "_") {
+            // } else if (Lexer::Contains(LETTERS, ToByteString(this->currentChar)) || this->currentChar == L"_") {
+            } else if (!Lexer::Contains(DIGITS, ToByteString(this->currentChar)) && !Lexer::Contains(Lexer::OP, ToByteString(this->currentChar))) {
                 tokens.push_back(this->MakeIdentifier());
-            } else if (this->currentChar == "+") {
+            } else if (this->currentChar == L"+") {
                 tokens.push_back(Token(TokenType::OP_Plus, nullptr, this->pos));
                 this->Advance();
-            } else if (this->currentChar == "-") {
+            } else if (this->currentChar == L"-") {
                 tokens.push_back(this->MakeMinusOrArrowToken());
-            } else if (this->currentChar == "*") {
+            } else if (this->currentChar == L"*") {
                 tokens.push_back(Token(TokenType::OP_Mul, nullptr, this->pos));
                 this->Advance();            
-            } else if (this->currentChar == "/") {
+            } else if (this->currentChar == L"/") {
                 tokens.push_back(Token(TokenType::OP_Div, nullptr, this->pos));
                 this->Advance();        
-            } else if (this->currentChar == "(") {
+            } else if (this->currentChar == L"(") {
                 tokens.push_back(Token(TokenType::Lparen, nullptr, this->pos));
                 this->Advance();  
-            } else if (this->currentChar == ")") {
+            } else if (this->currentChar == L")") {
                 tokens.push_back(Token(TokenType::Rparen, nullptr, this->pos));
                 this->Advance();  
-            } else if (this->currentChar == "[") {
+            } else if (this->currentChar == L"[") {
                 tokens.push_back(Token(TokenType::LSquare, nullptr, this->pos));
                 this->Advance();  
-            }  else if (this->currentChar == "]") {
+            }  else if (this->currentChar == L"]") {
                 tokens.push_back(Token(TokenType::RSquare, nullptr, this->pos));
                 this->Advance();  
-            } else if (this->currentChar == "'") {
+            } else if (this->currentChar == L"'") {
                 auto errorPos = this->pos->Copy();
                 auto tk = this->MakeString();
                 if (tk.type == TokenType::Invilid) {
@@ -702,36 +891,36 @@ public:
                     return std::make_pair(emptyTokens, new SyntaxError("Mismatched `'` in string literal", errorPos, this->pos));
                 }
                 tokens.push_back(tk);
-            } else if (this->currentChar == "=") {
+            } else if (this->currentChar == L"=") {
                 // tokens.push_back(Token(TokenType::OP_Eq, nullptr, this->pos));
                 // this->Advance();
                 tokens.push_back(this->MakeEquals());
-            } else if (this->currentChar == "<") {
+            } else if (this->currentChar == L"<") {
                 tokens.push_back(this->MakeLtToken());
-            } else if (this->currentChar == ">") {
+            } else if (this->currentChar == L">") {
                 tokens.push_back(this->MakeGtToken());
-            } else if (this->currentChar == "^") {
+            } else if (this->currentChar == L"^") {
                 tokens.push_back(Token(TokenType::OP_Pow, nullptr, this->pos));
                 this->Advance();
-            } else if (this->currentChar == "!") {
+            } else if (this->currentChar == L"!") {
                 auto [token, error] = this->MakeNeqToken();
                 if (error != nullptr) {
                     return std::make_pair(std::vector<Token>(), error);
                 }
                 tokens.push_back(token);
-            } else if (this->currentChar == ",") {
+            } else if (this->currentChar == L",") {
                 tokens.push_back(Token(TokenType::Comma, nullptr, this->pos));
                 this->Advance();
-            } else if (this->currentChar == ".") {
+            } else if (this->currentChar == L".") {
                 tokens.push_back(Token(TokenType::Dot, nullptr, this->pos));
                 this->Advance();
-            } else if (this->currentChar == ":") {
+            } else if (this->currentChar == L":") {
                 tokens.push_back(Token(TokenType::Colon, nullptr, this->pos));
                 this->Advance();
-            } else if (this->currentChar == "{") {
+            } else if (this->currentChar == L"{") {
                 tokens.push_back(Token(TokenType::LStart, nullptr, this->pos));
                 this->Advance();
-            } else if (this->currentChar == "}") {
+            } else if (this->currentChar == L"}") {
                 tokens.push_back(Token(TokenType::RStart, nullptr, this->pos));
                 this->Advance();
             } else {
@@ -739,7 +928,7 @@ public:
                 auto errorPos = this->pos->Copy();
                 this->Advance();
                 Tokens emptyTokens;
-                return std::make_pair(emptyTokens, new IllegalCharacterError(std::format("Found unexpected \'{}\'", errorChar), errorPos, this->pos));
+                return std::make_pair(emptyTokens, new IllegalCharacterError(std::format("Found unexpected \'{}\'", ToByteString(errorChar)), errorPos, this->pos));
             }
         }
 
@@ -755,8 +944,8 @@ public:
     }
 
 private:
-    std::string text;
-    std::string currentChar;
+    std::wstring text;
+    std::wstring currentChar;
     std::string filename;
     Position *pos;
     std::vector<void *> tokenValueRefs;
@@ -784,6 +973,10 @@ enum class NodeType {
     Attribution,
     AdvancedVarAccess,
     NewExpression,
+    AttributionCall,
+    SubsciptionCall,
+    NonlocalStatement,
+    Defer,
     Invilid
 };
 
@@ -796,6 +989,8 @@ const std::vector<std::string> NODE_TYPE_TAGS {
     "Subscription",
     "Dictionary", "Attribution", "AdvancedVarAccess", 
     "NewExpression",
+    "AttributionCall", "SubscriptionCall",
+    "NonlocalStatement",
     "Invilid" 
 };
 
@@ -1019,11 +1214,23 @@ struct ForExpressionNode final : public NodeBase {
     }
 };
 
+struct NonlocalStatementNode : public NodeBase {
+    Token freeVar;
+
+    explicit NonlocalStatementNode(Token freeVar) : freeVar(freeVar), NodeBase(NodeType::NonlocalStatement) {
+        this->st = freeVar.st;
+        this->et = freeVar.et;
+    }
+};
+
 struct FunctionDefinitionNode final : public NodeBase {
     Token fun;
     Tokens parameters;
     NodeBase *body;
+    std::vector<NonlocalStatementNode *> freeVars;
+    std::vector<NonlocalStatementNode *> cellVars;
     bool shouldAutoReturn;
+    std::vector<NodeBase *> defers;
 
     explicit FunctionDefinitionNode(Token fun, Tokens parameters, NodeBase *body, bool shouldAutoReturn) :
         fun(fun), parameters(parameters), body(body), shouldAutoReturn(shouldAutoReturn),  NodeBase(NodeType::FunctionDefinition)
@@ -1036,6 +1243,14 @@ struct FunctionDefinitionNode final : public NodeBase {
             this->st = this->body->st;
         }
         this->et = this->body->et;
+    }
+
+    void SetClosure(const std::vector<NonlocalStatementNode *> &f) {
+        this->freeVars = f;
+    }
+
+    void SetCell(const std::vector<NonlocalStatementNode *> &c) {
+        this->cellVars = c;
     }
 
     explicit FunctionDefinitionNode(Tokens parameters, NodeBase *body) : FunctionDefinitionNode(Token(TokenType::Invilid), parameters, body, true)
@@ -1057,6 +1272,7 @@ struct FunctionCallNode final : public NodeBase {
         }
     }
 };
+
 
 struct StringNode final : public NodeBase {
     Token stringToken;
@@ -1115,9 +1331,11 @@ struct SubscriptionNode final : public NodeBase {
     }
 };
 
+
 struct AttributionNode final : public NodeBase {
     Token attr;
     std::vector<Token> subAttrs;
+    std::map<int, NodeBase *> calls;
     NodeBase *assignment;
     NodeBase *target;
 
@@ -1132,8 +1350,28 @@ struct AttributionNode final : public NodeBase {
         }
     }
 
+    inline void SetCalls(const std::map<int, NodeBase *> &calls) {
+        this->calls = calls;
+    }
+
     inline void SetSubAttrs(const std::vector<Token> &attrs) {
         this->subAttrs = attrs;
+    }
+};
+
+struct AttributionCallNode final : public NodeBase {
+    FunctionCallNode *call;
+    explicit AttributionCallNode(FunctionCallNode *call) : call(call), NodeBase(NodeType::AttributionCall) {
+        this->st = this->call->st;
+        this->et = this->call->et;
+    }
+};
+
+struct SubscriptionCallNode final : public NodeBase {
+    FunctionCallNode *call;
+    explicit SubscriptionCallNode(FunctionCallNode *call) : call(call), NodeBase(NodeType::SubsciptionCall) {
+        this->st = this->call->st;
+        this->et = this->call->et;
     }
 };
 
@@ -1165,6 +1403,16 @@ struct NewExprNode : public NodeBase {
     explicit NewExprNode(NodeBase *newE) : newExpr(newE), NodeBase(NodeType::NewExpression) {
         this->st = newE->st;
         this->et = newE->et;
+    }
+};
+
+struct DeferNode : public NodeBase {
+    NodeBase *deferExpr;
+
+    explicit DeferNode(NodeBase *de, Position *st, Position *et) : NodeBase(NodeType::Defer) {
+        this->deferExpr = de;
+        this->st = st;
+        this->et = et;
     }
 };
 
@@ -1257,6 +1505,42 @@ public:
                 this->Reverse(result->reverseCount);
             }
             return result->Success(new ReturnStatementNode(returnExpression, posStart, this->currentToken.et->Copy()));
+        }
+
+        if (this->currentToken.Matches<std::string>(TokenType::Keyword, "nonlocal")) {
+            if (this->functionLayers < 2) {
+                return result->Failure(new SyntaxError(
+                    "'nonlocal' outside a closure function",
+                    this->currentToken.st, this->currentToken.et
+                ));
+            }
+
+            this->clousureLayer = this->functionLayers;
+            result->RegisterAdvance();
+            this->Advance();
+            if (this->currentToken.type != TokenType::Identifier) {
+                return result->Failure(new SyntaxError(
+                    "Nonlocal name must be a identifier",
+                    this->currentToken.st, this->currentToken.et
+                ));
+            }
+            auto nd = new NonlocalStatementNode(this->currentToken);
+            this->closureNodes[this->functionLayers].push_back(nd);
+            result->RegisterAdvance();
+            this->Advance();
+            return result->Success(nd);
+        } else if (this->currentToken.Matches<std::string>(TokenType::Keyword, "defer")) {
+            if (this->functionLayers == 0) {
+                return result->Failure(new SyntaxError(
+                    "'defer' outside a user-defined function",
+                    this->currentToken.st, this->currentToken.et
+                ));
+            }
+            result->RegisterAdvance();
+            this->Advance();
+
+            auto deferExpr = result->Register(this->Expr());
+            return result->Success(new DeferNode(deferExpr, posStart, this->currentToken.st));
         }
 
         if (this->currentToken.Matches<std::string>(TokenType::Keyword, "continue")) {
@@ -1832,20 +2116,72 @@ public:
         result->RegisterAdvance();
         this->Advance();
         std::vector<Token> attrs;
+        std::map<int, NodeBase *> calls;
 
-        while (this->currentToken.type == TokenType::Dot) {
-            result->RegisterAdvance();
-            this->Advance();
-            if (this->currentToken.type == TokenType::Identifier) {
-                attrs.push_back(this->currentToken);
-            } else {
-                return result->Failure(new SyntaxError(
-                    "Invilid attribute access", 
-                    this->currentToken.st, this->currentToken.et
+        int attributionIndex = 0;
+        while (this->currentToken.type == TokenType::Dot || this->currentToken.type == TokenType::Lparen) {
+
+            if (this->currentToken.type == TokenType::Lparen) {
+                this->Reverse();
+                auto token = this->currentToken;
+                result->RegisterAdvance();
+                this->Advance();
+                result->RegisterAdvance();
+                this->Advance();
+                std::vector<NodeBase *> args;
+
+                if (this->currentToken.type == TokenType::Rparen) {
+                    result->RegisterAdvance();
+                    this->Advance();
+                } else {
+                    args.push_back(result->Register(this->Expr()));
+                    if (result->err != nullptr) {
+                        // return result->Failure(new SyntaxError(
+                        //     "Invilid function call",
+                        //     this->currentToken.st, this->currentToken.et
+                        // ));
+                        return result;
+                    }
+    
+                    while (this->currentToken.type == TokenType::Comma) {
+                        result->RegisterAdvance();
+                        this->Advance();
+                        args.push_back(result->Register(this->Expr()));
+                        if (result->err != nullptr) {
+                            return result;
+                        }
+                    }
+    
+                    if (this->currentToken.type != TokenType::Rparen) {
+                        return result->Failure(new SyntaxError(
+                            "Mismatched '(' while calling function (unfinished)",
+                            this->currentToken.st, this->currentToken.et
+                        ));
+                    }
+    
+                    result->RegisterAdvance();
+                    this->Advance();
+                }
+                calls.insert(std::make_pair(
+                    attributionIndex,
+                    new AttributionCallNode(new FunctionCallNode(new VariableAccessNode(token), args))
                 ));
+            } else {
+                result->RegisterAdvance();
+                this->Advance();
+
+                if (this->currentToken.type == TokenType::Identifier) {
+                    attrs.push_back(this->currentToken);
+                } else {
+                    return result->Failure(new SyntaxError(
+                        "Invilid attribute access", 
+                        this->currentToken.st, this->currentToken.et
+                    ));
+                }
+                result->RegisterAdvance();
+                this->Advance();
+                attributionIndex++;            
             }
-            result->RegisterAdvance();
-            this->Advance();
         }
 
         if (this->currentToken.type == TokenType::OP_Eq) {
@@ -1862,6 +2198,7 @@ public:
             return result->Success(an);
         }
         auto an = new AttributionNode(varAccess, attr);
+        an->SetCalls(calls);
         if (attrs.size() > 0) {
             an->SetSubAttrs(attrs);
         }
@@ -2332,6 +2669,7 @@ public:
         auto result = new ParseResult;
         // deprecated:  this->insideAFunction = true;
         this->functionLayers++;
+        this->closureNodes.insert(std::make_pair(this->functionLayers, std::vector<NonlocalStatementNode *>()));
         if (!this->currentToken.Matches<std::string>(TokenType::Keyword, "function")) {
             return result->Failure(new SyntaxError(
                 "Expected 'function'", this->currentToken.st, this->currentToken.et
@@ -2411,7 +2749,8 @@ public:
             if (result->err != nullptr) {
                 return result;
             }
-            return result->Success(new FunctionDefinitionNode(funcNameToken, args, bodyNode, true));
+            auto fd = new FunctionDefinitionNode(funcNameToken, args, bodyNode, true);
+            return result->Success(fd);
         }
 
         if (this->currentToken.type != TokenType::NewLine) {
@@ -2439,8 +2778,25 @@ public:
         this->Advance();
 
         assert(functionLayers > 0);
+        auto fsd = new FunctionDefinitionNode(funcNameToken, args, body, false);
+        
+        if (this->functionLayers == this->closureNodes.size()) {
+            fsd->SetClosure(this->closureNodes[this->functionLayers]);
+            fsd->SetCell({});
+        } else if (this->functionLayers == 1) {
+            if (closureNodes.find(2) != closureNodes.end()) {
+                fsd->SetCell(this->closureNodes[2]);
+            } else {
+                fsd->SetCell({});
+            }
+            fsd->SetClosure({});
+        } else {
+            fsd->SetClosure(this->closureNodes[this->functionLayers]);
+            fsd->SetCell(this->closureNodes[this->functionLayers + 1]);
+        }
+
         this->functionLayers--;
-        return result->Success(new FunctionDefinitionNode(funcNameToken, args, body, false));
+        return result->Success(fsd);
     }
 
     ParseResult *Parse() {
@@ -2457,10 +2813,110 @@ private:
     int tokenIndex;
     bool insideAFunction; // deprecated
     int functionLayers;
+    int clousureLayer;
+    std::map<int, std::vector<NonlocalStatementNode *>> closureNodes;
 };
 
 
 enum class NumberType { Int, Float };
+struct RuntimeResult;
+struct Object;
+
+std::vector<RuntimeResult *> contextResultCache;
+
+struct RuntimeResult final {
+    Object *value;
+    Error *error;
+    Object *funcReturnValue;
+    // for loops
+    bool shouldContinue;
+    bool shouldBreak;
+    std::string extraInfo = "";
+
+    std::vector<RuntimeResult *> *resultCache;
+    Error *cause;
+
+    void Reset() {
+        this->value = nullptr;
+        this->error = nullptr;
+        this->shouldContinue = false;
+        this->shouldBreak = false;
+        this->funcReturnValue = nullptr;
+        this->cause = nullptr;
+    }
+
+    explicit RuntimeResult() : error(nullptr) {
+        this->Reset();
+        resultCache = &contextResultCache;
+        contextResultCache.push_back(this);
+    }
+
+    Object *Register(RuntimeResult *res) {
+        // if (res->error != nullptr) {
+            this->error = res->error;
+        // }
+        this->funcReturnValue = res->funcReturnValue;
+        this->shouldContinue = res->shouldContinue;
+        this->shouldBreak = res->shouldBreak;
+        this->cause = res->cause;
+        this->extraInfo = res->extraInfo;
+        return res->value;
+    }
+
+    void SetCause(Error *err) {
+        if (err != nullptr) {
+            this->cause = err;
+        }
+    }
+
+    void ClearCause() {
+        this->cause = nullptr;
+    }
+
+    RuntimeResult *Success(Object *value) {
+        this->Reset();
+        this->value = value;
+        return this;
+    }
+
+    RuntimeResult *SuccessReturn(Object *value) {
+        this->Reset();
+        this->funcReturnValue = value;
+        return this;
+    }
+
+    RuntimeResult *SuccessContinue() {
+        this->Reset();
+        this->shouldContinue = true;
+        return this;
+    }
+
+    RuntimeResult *SuccessBreak() {
+        this->Reset();
+        this->shouldBreak = true;
+        return this;
+    }
+
+    RuntimeResult *Failure(Error *err, Error *cause = nullptr) {
+        this->Reset();
+        this->error = err;
+        this->SetCause(cause);
+        return this; 
+    }
+
+    RuntimeResult *Failure(Error *err, Error *cause, const std::string &extra) {
+        this->Reset();
+        this->error = err;
+        this->extraInfo = extra;
+        this->SetCause(cause);
+        return this; 
+    }
+
+    bool ShouldReturn() {
+        return this->error != nullptr || this->shouldBreak || this->shouldContinue || this->funcReturnValue != nullptr;
+    }
+};
+
 
 struct Object {
     const char *typeName;
@@ -2587,6 +3043,28 @@ struct Object {
     virtual std::pair<Object *, Error *> SetAttr(const std::string &attr, Object *newVal) {
         return std::make_pair(nullptr, new TypeError(
             std::format("'{}' object has no user-defined attribute", this->typeName),
+            this->startPos, this->endPos, this->ctx
+        ));
+    }
+
+    virtual std::pair<Object *, Error *> Iter() {
+        return std::make_pair(nullptr, new TypeError(
+            std::format("'{}' object is not iterable", this->typeName),
+            this->startPos, this->endPos, this->ctx
+        ));
+    }
+
+    virtual std::pair<Object *, Error *> Next() {
+        return std::make_pair(nullptr, new TypeError(
+            std::format("'{}' object is not a iterator", this->typeName),
+            this->startPos, this->endPos, this->ctx
+        ));
+    }
+
+    virtual RuntimeResult *Execute(std::vector<Object *> args) {
+        auto result = new RuntimeResult;
+        return result->Failure(new TypeError(
+            std::format("'{}' object is not callable", this->typeName),
             this->startPos, this->endPos, this->ctx
         ));
     }
@@ -3077,93 +3555,6 @@ struct Number : public Object {
 };
 
 
-struct RuntimeResult;
-std::vector<RuntimeResult *> contextResultCache;
-
-struct RuntimeResult final {
-    Object *value;
-    Error *error;
-    Object *funcReturnValue;
-    // for loops
-    bool shouldContinue;
-    bool shouldBreak;
-
-    std::vector<RuntimeResult *> *resultCache;
-    Error *cause;
-
-    void Reset() {
-        this->value = nullptr;
-        this->error = nullptr;
-        this->shouldContinue = false;
-        this->shouldBreak = false;
-        this->funcReturnValue = nullptr;
-        this->cause = nullptr;
-    }
-
-    explicit RuntimeResult() : error(nullptr) {
-        this->Reset();
-        resultCache = &contextResultCache;
-        contextResultCache.push_back(this);
-    }
-
-    Object *Register(RuntimeResult *res) {
-        // if (res->error != nullptr) {
-            this->error = res->error;
-        // }
-        this->funcReturnValue = res->funcReturnValue;
-        this->shouldContinue = res->shouldContinue;
-        this->shouldBreak = res->shouldBreak;
-        this->cause = res->cause;
-        return res->value;
-    }
-
-    void SetCause(Error *err) {
-        if (err != nullptr) {
-            this->cause = err;
-        }
-    }
-
-    void ClearCause() {
-        this->cause = nullptr;
-    }
-
-    RuntimeResult *Success(Object *value) {
-        this->Reset();
-        this->value = value;
-        return this;
-    }
-
-    RuntimeResult *SuccessReturn(Object *value) {
-        this->Reset();
-        this->funcReturnValue = value;
-        return this;
-    }
-
-    RuntimeResult *SuccessContinue() {
-        this->Reset();
-        this->shouldContinue = true;
-        return this;
-    }
-
-    RuntimeResult *SuccessBreak() {
-        this->Reset();
-        this->shouldBreak = true;
-        return this;
-    }
-
-    RuntimeResult *Failure(Error *err, Error *cause = nullptr) {
-        this->Reset();
-        this->error = err;
-        this->SetCause(cause);
-        return this; 
-    }
-
-    bool ShouldReturn() {
-        return this->error != nullptr || this->shouldBreak || this->shouldContinue || this->funcReturnValue != nullptr;
-    }
-};
-
-
 struct SymbolTable final {
     std::map<std::string, Object *> symbols;
     SymbolTable *parentFieldSymbols;
@@ -3232,6 +3623,25 @@ struct SymbolTable final {
 struct String : public Object {
     using ObjectWithError = std::pair<Object *, Error *>;
 
+    struct StringIterator : public Object {
+        std::string content;
+        std::wstring iterContent;
+        long n;
+        explicit StringIterator(const std::string &content) : content(content), n(-1) {
+            this->iterContent = ToWideString(this->content);
+        }
+
+        ObjectWithError Next() override {
+            this->n++;
+            if (n < this->iterContent.length()) {
+                auto s = ToByteString(Lexer::CharAt(this->iterContent, n));
+                return std::make_pair(new String(s), nullptr);
+            } else {
+                return std::make_pair(nullptr, new StopIteration);
+            }
+        }
+    };
+
     static inline std::string Repeat(const std::string &s, int times) {
         std::string result;
         for (int i = 0; i < times; i++) {
@@ -3296,14 +3706,15 @@ struct String : public Object {
     }
 
     std::pair<Object *, Error *> Len() override {
-        return std::make_pair(new Number((int) this->s.length()), nullptr);
+        return std::make_pair(new Number((int) ToWideString(this->s).length()), nullptr);
     }
 
     inline void Representation() {
         std::string repr;
         std::cout << "'";
-        for (long i = 0; i < this->s.length(); i++) {
-            auto c = Lexer::CharAt(this->s, i);
+        std::wstring ws = ToWideString(this->s);
+        for (long i = 0; i < ws.length(); i++) {
+            auto c = ToByteString(Lexer::CharAt(ws, i));
             if (REVERSED_ESCAPE_CHARACTERS.find(c) != REVERSED_ESCAPE_CHARACTERS.end()) {
                 std::cout << "\\";
                 std::cout << REVERSED_ESCAPE_CHARACTERS.at(c);
@@ -3316,9 +3727,10 @@ struct String : public Object {
 
     inline void Representation(std::ostream &o, bool nl = false) {
         std::string repr;
+        std::wstring ws = ToWideString(this->s);        
         o << "'";
-        for (long i = 0; i < this->s.length(); i++) {
-            auto c = Lexer::CharAt(this->s, i);
+        for (long i = 0; i < ws.length(); i++) {
+            auto c = ToByteString(Lexer::CharAt(ws, i));
             if (REVERSED_ESCAPE_CHARACTERS.find(c) != REVERSED_ESCAPE_CHARACTERS.end()) {
                 o << "\\";
                 o << REVERSED_ESCAPE_CHARACTERS.at(c);
@@ -3349,6 +3761,7 @@ struct String : public Object {
         }
 
         auto indexNum = std::get<int>(index->value);
+        auto ws = ToWideString(this->s);
         if (indexNum < 0) {
             return std::make_pair(nullptr, new TypeError(
                 "String index should be a positive integer",
@@ -3356,14 +3769,18 @@ struct String : public Object {
             ));
         }
 
-        if (indexNum + 1 > this->s.length()) {
+        if (indexNum + 1 > ws.length()) {
             return std::make_pair(nullptr, new TypeError(
                 std::format("String index out of range (maximum is {} but got {})", this->s.length() - 1, indexNum),
                 other->startPos, other->endPos, this->ctx
             ));
         }
 
-        return std::make_pair(new String(std::string(1, this->s[indexNum])), nullptr);
+        return std::make_pair(new String(ToByteString(Lexer::CharAt(ws, indexNum))), nullptr);
+    }
+
+    ObjectWithError Iter() {
+        return std::make_pair(new StringIterator(this->s), nullptr);
     }
 
     ~String() = default;
@@ -3408,9 +3825,9 @@ struct List : public Object {
             return std::make_pair(nullptr, Object::IllegalOperation(other, "<list-concat '*'>"));
         }
         auto newList = dynamic_cast<List *>(this->Copy());
-        for (auto e : this->elements) {
-            newList->elements.push_back(e);
-        }
+        // for (auto e : this->elements) {
+        //     newList->elements.push_back(e);
+        // }
         for (auto e : dynamic_cast<List *>(other)->elements) {
             newList->elements.push_back(e);
         }
@@ -3447,7 +3864,7 @@ struct List : public Object {
     }
 
     ObjectWithError DividedBy(Object *other) override {
-        if (other->typeName != "Number") {
+        if (other->typeName != std::string("Number")) {
             return std::make_pair(nullptr, Object::IllegalOperation(other, "<list-access '/'>"));
         } else {
             auto index = dynamic_cast<Number *>(other);
@@ -3612,7 +4029,7 @@ struct Dictionary : public Object {
                 return std::make_pair(Number::null, nullptr);
             }
         }
-        if (other->typeName != "String" && other->typeName != "Number") {
+        if (other->typeName != std::string("String") && other->typeName != std::string("Number")) {
             return std::make_pair(nullptr, new TypeError(
                 std::format("Invilid key type: '{}'", other->typeName),
                 other->startPos, other->endPos, this->ctx
@@ -3624,7 +4041,7 @@ struct Dictionary : public Object {
 
     ObjectWithError GetAttr(const std::string &attr) override {
         for (auto [attrName, value] : this->elements) {
-            if (attrName->typeName != "String") {
+            if (attrName->typeName != std::string("String")) {
                 continue;
             }
             auto key = As<String>(attrName);
@@ -3646,6 +4063,10 @@ struct Dictionary : public Object {
         auto copy = new Dictionary(this->elements);
         copy->SetContext(this->ctx)->SetPos(this->startPos, this->endPos);
         return copy;
+    }
+
+    ObjectWithError Len() override {
+        return std::make_pair(new Number((int) this->elements.size()), nullptr);
     }
 
     inline std::string ToString() override {
@@ -3684,9 +4105,16 @@ public:
     RuntimeResult *VisitAttribution(NodeBase *node, Context *ctx);
     RuntimeResult *VisitAdvancedVarAccess(NodeBase *node, Context *ctx);
     RuntimeResult *VisitNewExpression(NodeBase *node, Context *ctx);
+    RuntimeResult *VisitAttributionCall(NodeBase *node, Context *ctx);
+    RuntimeResult *VisitNonlocal(NodeBase *node, Context *ctx);
+    RuntimeResult *VisitDefer(NodeBase *node, Context *ctx);
+    std::vector<Context *> *GetCallStack() { return this->callStack; }
     [[noreturn]] RuntimeResult *VisitEmpty(NodeBase *node, Context *ctx);
     ~Interpreter();
+
+    std::vector<Context *> *callStack;
 };
+
 
 std::map<std::string, Context *> moduleContextCache;
 std::map<std::string, std::string> symbolsModuleLocation;
@@ -3701,11 +4129,18 @@ struct FunctionBase : virtual public Object {
     Context *GenerateNewContext() {
         if (symbolsModuleLocation.find(this->functionName) == symbolsModuleLocation.end()) {
             auto frameContext = new Context(this->functionName, this->ctx, this->startPos);
-            frameContext->symbols = new SymbolTable(frameContext->global);
+            // frameContext->symbols = new SymbolTable(frameContext->global);
+            frameContext->symbols = new SymbolTable(this->ctx->symbols);
+            frameContext->nonlocals = new SymbolTable;
             // frameContext->symbols->Set(frameContext->parent->ctxLabel, this->ctx->symbols->Get(frameContext->parent->ctxLabel));        
             return frameContext;
         }
-        return moduleContextCache.at(symbolsModuleLocation.at(this->functionName));
+        auto ctxTmpl = moduleContextCache.at(symbolsModuleLocation.at(this->functionName));
+        auto frameContext = new Context(this->functionName, ctxTmpl, this->startPos);
+        frameContext->symbols = new SymbolTable(ctxTmpl->symbols);
+        frameContext->nonlocals = new SymbolTable;
+
+        return frameContext;
     }
 
     virtual RuntimeResult *CheckArguments(const std::vector<std::string> &argNames, std::vector<Object *> &args) {
@@ -3754,10 +4189,14 @@ struct Function : public FunctionBase {
     std::vector<std::string> parameters;
     bool shouldAutoReturn;
     std::string mutableArgName;
+    std::vector<std::string> cellVars;
+    SymbolTable *closureVarsTable;
 
     explicit Function(const std::string &name, NodeBase *body, std::vector<std::string> args, bool shouldAutoReturn) :
         FunctionBase(name), body(body), parameters(args), shouldAutoReturn(shouldAutoReturn), Object("Function")
-    {}
+    {
+        this->closureVarsTable = new SymbolTable;
+    }
 
     explicit Function(NodeBase *body, std::vector<std::string> args, bool shouldAutoReturn) : 
         Function("<anonymous>", body, args, shouldAutoReturn) {}
@@ -3839,13 +4278,39 @@ struct Function : public FunctionBase {
         auto interpreter = new Interpreter;
         auto frameContext = this->GenerateNewContext();
 
+        for (auto [name, value] : this->closureVarsTable->symbols) {
+            frameContext->nonlocals->Set(name, value);
+        }
+
         result->Register(this->CheckAndPopulate(this->parameters, args, frameContext));
         if (result->ShouldReturn()) {
             return result;
         }
+
         auto returnValue = result->Register(interpreter->Visit(this->body, frameContext));
         if (result->ShouldReturn() && result->funcReturnValue == nullptr) {
-            return result;
+            Error *lastError = result->error;
+            if (frameContext->deferNodes.size() != 0) {
+                for (auto node : frameContext->deferNodes) {
+                    auto expr = dynamic_cast<DeferNode *>(node)->deferExpr;
+                    if (currentCallStackDepth <= MAX_CALLSTACK_DEPTH) {
+                        result->Register(interpreter->Visit(expr, frameContext));        
+                        if (result->ShouldReturn()) {
+                            return result->Failure(
+                                lastError, result->error, "During handling the above exception, another exception occurred:"
+                            );                        
+                        }
+                    } else {
+                         return result->Failure(new RuntimeError(
+                            "`defer` terminated due to stack overflow",
+                            this->startPos, this->endPos, this->ctx
+                        ));
+                    }
+                }
+                return result->Failure(lastError);
+            } else {
+                return result;
+            }
         }
         Object *returns = nullptr;
         if (shouldAutoReturn && result->funcReturnValue == nullptr) {
@@ -3855,11 +4320,30 @@ struct Function : public FunctionBase {
         } else {
             returns = Number::null;
         }
+
+        if (frameContext->deferNodes.size() != 0) {
+            for (auto node : frameContext->deferNodes) {
+                auto expr = dynamic_cast<DeferNode *>(node)->deferExpr;
+                if (currentCallStackDepth <= MAX_CALLSTACK_DEPTH) {
+                    result->Register(interpreter->Visit(expr, frameContext));        
+                    if (result->ShouldReturn()) {
+                        return result;                    
+                    }
+                } else {
+                    return result->Failure(new RuntimeError(
+                        "`defer` terminated due to stack overflow",
+                        this->startPos, this->endPos, this->ctx
+                    ));
+                }
+            }
+        }
         return result->Success(returns);
     }
 
     Object *Copy() override {
         auto copiedFunction = new Function(this->functionName, this->body, this->parameters, this->shouldAutoReturn);
+        copiedFunction->cellVars = this->cellVars;
+        copiedFunction->closureVarsTable = this->closureVarsTable;
         copiedFunction->SetContext(this->ctx);
         copiedFunction->SetPos(this->startPos, this->endPos);
         return copiedFunction;        
@@ -3911,7 +4395,32 @@ struct ClassObject : public Dictionary {
         if (isProto) {
             return std::format("<Prototype of object '{}' at {}>", this->className, (void *) this);
         } else {
-            return std::format("{} {}", this->className, StringifyMapping(this->elements, "__", "__"));
+            std::stringstream ss;
+            ss << RED << this->className << RESET << " {\n  ";
+            int idx = 0;
+            for (const auto &[k, v] : this->elements) {
+                std::string s;
+                if (idx + 1 == this->elements.size()) {
+                    s = "\n}";
+                } else {
+                    s = ",\n  ";
+                }
+                std::string vs;
+                if (v->typeName == std::string("Function")) {
+                    vs = "[Function]";
+                } else if (v->typeName == std::string("String")) {
+                    vs = std::format("'{}'", v->ToString());
+                } else {
+                    vs = v->ToString();
+                }
+                ss << std::format("'{}': ", k->ToString());
+                ss << CYAN;
+                ss << std::format("{}", vs);
+                ss << RESET;
+                ss << std::format("{}", s);
+                idx++;
+            }
+            return ss.str();
         }
     }
 
@@ -3998,6 +4507,11 @@ struct Method : public Function {
 };
 
 
+struct BigInt : public Object {
+    
+};
+
+
 void Interprete(const std::string &, const std::string &, InterpreterStartMode, const std::string & = "", Context * = nullptr, Position *parentEntry = nullptr);
 void SetBuiltins(SymbolTable *global);
 const std::vector<std::string> builtinNames { 
@@ -4005,7 +4519,7 @@ const std::vector<std::string> builtinNames {
     "sin", "cos", "tan", "abs", "log", "ln", "sqrt", "isFloating", "isInteger",
     "input", "import", "set", "require",
     "readFile", "writeFile", "append", "concat", "remove", "builtins", "panic", "del",
-    "range", "addressOf"
+    "range", "addressOf", "keys", "values", "global"
 };
 
 std::map<std::string, std::string> *envVars = nullptr;
@@ -4494,6 +5008,33 @@ namespace builtins {
                 return result->Success(new List(iter));
             }
         }
+
+        YanObject Keys(YanContext ctx) {
+            auto result = new RuntimeResult;
+            auto arg = ctx->symbols->Get("_dict");
+            auto err = AssertYanTypeMatches(ctx, arg, "_dict", { "Dictionary" });
+            if (err != nullptr) {
+                return result->Failure(err);
+            }
+            auto dict = As<Dictionary>(arg);
+            return result->Success(new List(dict->GetKeys()));
+        }
+
+        YanObject Values(YanContext ctx) {
+            auto result = new RuntimeResult;
+            auto arg = ctx->symbols->Get("_dict");
+            auto err = AssertYanTypeMatches(ctx, arg, "_dict", { "Dictionary" });
+            if (err != nullptr) {
+                return result->Failure(err);
+            }
+
+            auto dict = As<Dictionary>(arg);
+            std::vector<Object *> values;
+            for (auto &[k, v] : dict->elements) {
+                values.push_back(v);
+            }
+            return result->Success(new List(values));
+        }
     }
     
     YanObject Set(YanContext ctx) {
@@ -4546,7 +5087,7 @@ namespace builtins {
         oss << ifs.rdbuf();
         auto code = oss.str();
 
-        auto lexer = new Lexer(moduleFile, code);
+        auto lexer = new Lexer(moduleFile, ToWideString(code));
         auto [tokens, err] = lexer->MakeTokens();
         if (err != nullptr) {
             return result->Failure(err);
@@ -4557,10 +5098,18 @@ namespace builtins {
             return result->Failure(parseR->err);
         }
         auto moduleContext = new Context(std::format("<module '{}'>", moduleFile));
+        moduleContext->parent = ctx;
+        moduleContext->parentEntry = st;
         moduleContext->symbols = new SymbolTable;
         SetBuiltins(moduleContext->symbols);
         auto interpreter = new Interpreter;
-        interpreter->Visit(parseR->ast, moduleContext);
+        result->Register(interpreter->Visit(parseR->ast, moduleContext));
+        if (result->ShouldReturn()) {
+            return result->Failure(new RuntimeError(
+                std::format("Failed to load module: '{}'", moduleFile),
+                st, et, ctx
+            ), result->error);
+        }
 
         auto symbol = moduleContext->symbols->Get(symbolName);
         if (symbol == nullptr) {
@@ -4603,7 +5152,7 @@ namespace builtins {
         oss << ifs.rdbuf();
         auto code = oss.str();
 
-        auto lexer = new Lexer(moduleFile, code);
+        auto lexer = new Lexer(moduleFile, ToWideString(code));
         auto [tokens, err] = lexer->MakeTokens();
         if (err != nullptr) {
             return result->Failure(err);
@@ -4614,10 +5163,18 @@ namespace builtins {
             return result->Failure(parseR->err);
         }
         auto moduleContext = new Context(std::format("<module '{}'>", moduleFile));
+        moduleContext->parent = ctx;   
+        moduleContext->parentEntry = st;             
         moduleContext->symbols = new SymbolTable;
         SetBuiltins(moduleContext->symbols);
         auto interpreter = new Interpreter;
-        interpreter->Visit(parseR->ast, moduleContext);
+        result->Register(interpreter->Visit(parseR->ast, moduleContext));
+        if (result->ShouldReturn()) {
+            return result->Failure(new RuntimeError(
+                std::format("Failed to load module: '{}'", moduleFile),
+                st, et, ctx
+            ), result->error);
+        }
         moduleContextCache.insert(std::make_pair(moduleFile, moduleContext));
 
         for (auto &[symbolName, symbol] : moduleContext->symbols->symbols) {
@@ -4648,7 +5205,7 @@ namespace builtins {
         oss << ifs.rdbuf();
         auto code = oss.str();
 
-        auto lexer = new Lexer(moduleFile, code);
+        auto lexer = new Lexer(moduleFile, ToWideString(code));
         auto [tokens, err] = lexer->MakeTokens();
         if (err != nullptr) {
             return result->Failure(err);
@@ -4659,10 +5216,18 @@ namespace builtins {
             return result->Failure(parseR->err);
         }
         auto moduleContext = new Context(std::format("<module '{}'>", moduleFile));
+        moduleContext->parent = ctx;        
+        moduleContext->parentEntry = st;        
         moduleContext->symbols = new SymbolTable;
         SetBuiltins(moduleContext->symbols);
         auto interpreter = new Interpreter;
-        interpreter->Visit(parseR->ast, moduleContext);
+        result->Register(interpreter->Visit(parseR->ast, moduleContext));
+        if (result->ShouldReturn()) {
+            return result->Failure(new RuntimeError(
+                std::format("Failed to load module: '{}'", moduleFile),
+                st, et, ctx
+            ), result->error);
+        }
         moduleContextCache.insert(std::make_pair(moduleFile, moduleContext));
 
         std::map<Object *, Object *> moduleSymbols;
@@ -4672,6 +5237,7 @@ namespace builtins {
                 symbolsModuleLocation.insert(std::make_pair(symbolName, moduleFile));
             }
         }
+
         dest->symbols->Set(moduleFile, new Dictionary(moduleSymbols));
         return result->Success(Number::null);
     }
@@ -4705,7 +5271,7 @@ namespace builtins {
                 auto symbolName = symbolInfo[1];
                 auto symbol = _InterpreteModule(symbolSourceFile, symbolName, arg->startPos, arg->endPos, ctx);
                 if (symbol->error != nullptr) {
-                    return result->Failure(symbol->error);
+                    return result->Failure(symbol->error, symbol->cause);
                 }
 
                 return result->Success(symbol->value);
@@ -4713,7 +5279,7 @@ namespace builtins {
                 auto destCtx = ctx->parent;
                 auto status = _useModule(symbolInfo[0], destCtx, arg->startPos, arg->endPos, ctx);
                 if (status->error != nullptr) {
-                    return result->Failure(status->error);
+                    return result->Failure(status->error, status->cause);
                 }
                 return result->Success(Number::null);
             }
@@ -4739,7 +5305,7 @@ namespace builtins {
             auto destCtx = ctx->parent;
             auto status = _ImportModule(moduleName, destCtx, arg->startPos, arg->endPos, ctx);
             if (status->error != nullptr) {
-                return result->Failure(status->error);
+                return result->Failure(status->error, status->cause);
             }
 
             return result->Success(Number::null);
@@ -4766,7 +5332,7 @@ namespace builtins {
     YanObject Eval(YanContext ctx) {
         auto result = new RuntimeResult;
         auto code = ctx->symbols->Get("_code");
-        if (code->typeName != "String") {
+        if (code->typeName != std::string("String")) {
             return result->Failure(new TypeError(
                 std::format("Argument '_code' must be a String (got {})", code->typeName),
                 code->startPos, code->endPos, ctx
@@ -4781,7 +5347,7 @@ namespace builtins {
     YanObject ParseInt(YanContext ctx) {
         auto result = new RuntimeResult;
         auto yanStr = ctx->symbols->Get("_str");
-        if (yanStr->typeName != "String") {
+        if (yanStr->typeName != std::string("String")) {
             return result->Failure(new TypeError(
                 std::format("Argument '_str' must be a String (got {})", yanStr->typeName),
                 yanStr->startPos, yanStr->endPos, ctx
@@ -4793,7 +5359,7 @@ namespace builtins {
     YanObject ParseFloat(YanContext ctx) {
         auto result = new RuntimeResult;
         auto yanStr = ctx->symbols->Get("_str");
-        if (yanStr->typeName != "String") {
+        if (yanStr->typeName != std::string("String")) {
             return result->Failure(new TypeError(
                 std::format("Argument '_str' must be a String (got {})", yanStr->typeName),
                 yanStr->startPos, yanStr->endPos, ctx
@@ -4807,7 +5373,12 @@ namespace builtins {
     }
 
     YanObject TypeNameOf(YanContext ctx) {
-        return (new RuntimeResult())->Success(new String(std::format("<type '{}'>", std::string(ctx->symbols->Get("_object")->typeName))));
+        auto obj = ctx->symbols->Get("_object");
+        if (obj->typeName == std::string("ClassObject")) {
+            return (new RuntimeResult)->Success(new String(std::format("[Class {}]", dynamic_cast<ClassObject *>(obj)->className)));
+        } else {
+            return (new RuntimeResult())->Success(new String(std::format("[builtins.{}]", std::string(obj->typeName))));
+        }
     }
 
     YanObject Builtins(YanContext ctx) {
@@ -4858,6 +5429,30 @@ namespace builtins {
             new String(std::format("{}", static_cast<void *>(ctx->symbols->Get("_object"))))
         );
     }
+
+    YanObject Global(YanContext ctx) {
+        auto result = new RuntimeResult;
+        auto arg = ctx->symbols->Get("_varName");
+        auto value = ctx->symbols->Get("_value");
+
+        if (arg->typeName != std::string("String")) {
+            return result->Failure(new TypeError(
+                "Variable name must be a string",
+                arg->startPos, arg->endPos, ctx
+            ));
+        }
+
+        auto varName = As<String>(arg)->s;
+        if (ctx->global->Get(varName) == nullptr)  {
+            return result->Failure(new ValueError(
+                std::format("Variable '{}' is not declared in global scope", varName),
+                arg->startPos, arg->endPos, ctx
+            ));
+        }
+
+        ctx->global->Set(varName, value);
+        return result->Success(Number::null);
+    }
 }
 
 const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFuncIndexes {
@@ -4892,7 +5487,10 @@ const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFunc
     { "isInteger", builtins::Math::IsInteger },
     { "del", builtins::Del },
     { "range", builtins::List_::Range },
-    { "addressOf", builtins::AddressOf }
+    { "addressOf", builtins::AddressOf },
+    { "keys", builtins::List_::Keys },
+    { "values", builtins::List_::Values },
+    { "global", builtins::Global }
 };
 
 const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry {
@@ -4925,7 +5523,10 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
     { "isInteger", { "_num" } },
     { "del", { "_varName" } },
     { "range", { "_a", "__b__", "__c__" } },
-    { "addressOf", { "_object" } }
+    { "addressOf", { "_object" } },
+    { "keys", { "_dict" } },
+    { "values", { "_dict" } },
+    { "global", { "_varName", "_value" } }
 };
 
 #ifdef __linux__
@@ -4933,7 +5534,7 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
 #elif defined(_WIN32)
     using DylibType = win32::HMODULE;
 #endif
-std::map<std::string, std::pair<std::string, void *>> dynamicLoadedSymbol;
+static std::map<std::string, std::pair<std::string, void *>> dynamicLoadedSymbol;
 std::map<std::string, DylibType> dylibs;
 std::map<std::string, builtins::YanModuleDeclearation> nativeModules;
 
@@ -4948,6 +5549,10 @@ struct BuiltinFunction : public FunctionBase {
         auto frameContext = this->GenerateNewContext();
         auto builtinFunctionName = this->functionName;
         builtins::BuiltinFunctionImplementation func;
+
+        if (currentCallStackDepth > 1) {
+             currentCallStackDepth--; // built-in call does not take times of max calls
+        }
         if (!this->dynamicBind) {
             if (builtinFuncIndexes.find(builtinFunctionName) == builtinFuncIndexes.end()) {
                 if (dynamicLoadedSymbol.find(builtinFunctionName) != dynamicLoadedSymbol.end()) {
@@ -4967,6 +5572,17 @@ struct BuiltinFunction : public FunctionBase {
         if (builtinFuncParamsRegistry.find(builtinFunctionName) != builtinFuncParamsRegistry.end() && this->argDeclearation.size() == 0) {
             result->Register(this->CheckAndPopulate(builtinFuncParamsRegistry.at(builtinFunctionName), args, frameContext));
         } else if (this->argDeclearation.size() != 0) {
+            if (this->argDeclearation.size() == 1) {
+                if (this->argDeclearation[0] == std::string("void")) {
+                    if (args.size() != 0) {
+                        result->Register((new RuntimeResult)->Failure(new RuntimeError(
+                            std::format("Function '{}' decleared as `void` should not take argument(s) [got {}]", functionName, args.size()),
+                            this->startPos, this->endPos, this->ctx
+                        )));
+                        return result;
+                    }
+                }
+            }
             result->Register(this->CheckAndPopulate(this->argDeclearation, args, frameContext));
         }
         if (result->ShouldReturn()) {
@@ -5110,12 +5726,13 @@ Object *ClassObject::Instantiate(const std::vector<Object *> &args) {
     result->Register(boundedCtor->Execute(args));
     if (result->ShouldReturn()) {
         std::cerr << "Internal interpreter error: " << result->error->name << ": " << result->error->details << std::endl;
+        std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;
         assert(false);
     }
     return object;
 }
 
-std::map<std::string, BuiltinFunction *> allBuiltins {
+static std::map<std::string, BuiltinFunction *> allBuiltins {
     { "print", nullptr },
     { "println", nullptr },
     { "typeof", nullptr },
@@ -5144,7 +5761,10 @@ std::map<std::string, BuiltinFunction *> allBuiltins {
     { "builtins", nullptr },
     { "del", nullptr },
     { "range", nullptr },
-    { "addressOf", nullptr }
+    { "addressOf", nullptr },
+    { "keys", nullptr }, 
+    { "values", nullptr },
+    { "global", nullptr }
 };
 
 DylibType OpenDynamicLibrary(const std::string &dylib) {
@@ -5224,7 +5844,7 @@ auto LoadNativeFunctionImplementation(const std::string &dynamicLib, const std::
         #elif defined(_WIN32)
             symbol = reinterpret_cast<void *>(win32::GetProcAddress(dylib, "YanModule_OnLoad"));
                 if (symbol == nullptr) {
-                std::cerr << "Fatal: Error locating symbol '" + name << "' in dynamic lib '" + dynamicLib + "': " << std::format("[WinError {}]", win32::GetLastError()) << std::endl;
+                std::cerr << "Fatal: Error locating onLoad() function of '" << dynamicLib + "': " << std::format("[WinError {}]", win32::GetLastError()) << std::endl;
                 return nullptr;
             }
         #endif
@@ -5239,6 +5859,7 @@ auto LoadNativeFunctionImplementation(const std::string &dynamicLib, const std::
 builtins::YanObject builtins::_LoadNativeSymbol(const std::string &mod, const std::string &symbolName, Position *st, Position *et, builtins::YanContext ctx) {
     auto symbol = LoadNativeFunctionImplementation(mod, symbolName);
     auto func = new BuiltinFunction(symbolName);
+    func->SetPos(st, et)->SetContext(ctx);
     auto modDec = nativeModules.at(mod);
     if (modDec->functionArgumentDeclearation.find(symbolName) != modDec->functionArgumentDeclearation.end()) {
         func->argDeclearation = modDec->functionArgumentDeclearation.at(symbolName);
@@ -5263,7 +5884,9 @@ void SetBuiltins(SymbolTable *global) {
 }
 
 
-Interpreter::Interpreter() = default;
+Interpreter::Interpreter() {
+    this->callStack = new std::vector<Context *>;
+}
 
 RuntimeResult *Interpreter::Visit(NodeBase *node, Context *ctx) {
     switch (node->nodeType) {
@@ -5307,6 +5930,12 @@ RuntimeResult *Interpreter::Visit(NodeBase *node, Context *ctx) {
             return this->VisitAdvancedVarAccess(node, ctx);
         case NodeType::NewExpression:
             return this->VisitNewExpression(node, ctx);
+        case NodeType::AttributionCall:
+            return this->VisitAttributionCall(node, ctx);
+        case NodeType::NonlocalStatement:
+            return this->VisitNonlocal(node, ctx);
+        case NodeType::Defer:
+            return this->VisitDefer(node, ctx);
         case NodeType::Invilid:
             return this->VisitEmpty(node, ctx);
     }
@@ -5587,31 +6216,64 @@ RuntimeResult *Interpreter::VisitForExpression(NodeBase *node, Context *ctx) {
         if (result->ShouldReturn()) {
             return result;
         }
+        auto iteratorRaw = iterableRaw->Iter();
+        bool iterList = true;
+        if (iterableRaw->typeName != std::string("List")) {
+            iterList = false;
+            if (iteratorRaw.second != nullptr || iteratorRaw.first == nullptr) {
+                return result->Failure(new TypeError(
+                    std::format("Object '{}' is not iterable", iterableRaw->typeName),
+                    iterableRaw->startPos, iterableRaw->endPos, ctx
+                ));
+            }
+        }
+
+        if (iterList) {
+            auto iterable = As<List>(iterableRaw);
+            for (auto &i : iterable->elements) {
+                ctx->symbols->Set(*(std::string *) forNode->var.value, i);
+                auto value = result->Register(this->Visit(forNode->body, ctx));
+                if (result->ShouldReturn() && !result->shouldContinue && !result->shouldBreak) {
+                    return result;
+                }
         
-        if (iterableRaw->typeName != "List") {
-            return result->Failure(new TypeError(
-                std::format("Object '{}' is not iterable", iterableRaw->typeName),
-                iterableRaw->startPos, iterableRaw->endPos, ctx
-            ));
+                if (result->shouldContinue) {
+                    continue;
+                }
+                if (result->shouldBreak) {
+                    break;
+                }
+                elements.push_back(value);
+            }
+            ctx->symbols->Remove(*(std::string *) forNode->var.value);
+            return result->Success(forNode->shouldReturnNull ? Number::null : (new List(elements))->SetContext(ctx)->SetPos(node->st, node->et));
+        } else {
+            auto iterator = iteratorRaw.first;
+            std::pair<Object *, Error *> iterResultTmp { nullptr, nullptr };
+            iterResultTmp = iterator->Next();
+            while (iterResultTmp.second == nullptr) {
+                ctx->symbols->Set(*(std::string *) forNode->var.value, iterResultTmp.first);
+                auto value = result->Register(this->Visit(forNode->body, ctx));
+                if (result->ShouldReturn() && !result->shouldContinue && !result->shouldBreak) {
+                    return result;
+                }
+        
+                if (result->shouldContinue) {
+                    continue;
+                }
+                if (result->shouldBreak) {
+                    break;
+                }
+                elements.push_back(value);
+                iterResultTmp = iterator->Next();                      
+            }
+            ctx->symbols->Remove(*(std::string *) forNode->var.value);
+            delete iterator;
+            if (iterResultTmp.second->name != "StopIteration") {
+                return result->Failure(iterResultTmp.second);
+            }          
+            return result->Success(forNode->shouldReturnNull ? Number::null : (new List(elements))->SetContext(ctx)->SetPos(node->st, node->et));              
         }
-        auto iterable = As<List>(iterableRaw);
-        for (auto &i : iterable->elements) {
-            ctx->symbols->Set(*(std::string *) forNode->var.value, i);
-            auto value = result->Register(this->Visit(forNode->body, ctx));
-            if (result->ShouldReturn() && !result->shouldContinue && !result->shouldBreak) {
-                return result;
-            }
-    
-            if (result->shouldContinue) {
-                continue;
-            }
-            if (result->shouldBreak) {
-                break;
-            }
-            elements.push_back(value);
-        }
-        ctx->symbols->Remove(*(std::string *) forNode->var.value);
-        return result->Success(forNode->shouldReturnNull ? Number::null : (new List(elements))->SetContext(ctx)->SetPos(node->st, node->et));
     }
 }
 
@@ -5655,25 +6317,56 @@ RuntimeResult *Interpreter::VisitFunctionDefinition(NodeBase *node, Context *ctx
 
     if (funcDefNode->fun.type == TokenType::Invilid) {
         function = dynamic_cast<Function *>((new Function(funcBody, parameters, funcDefNode->shouldAutoReturn))->SetContext(ctx)->SetPos(node->st, node->et));    
+        return result->Success(function);    
     } else {
         function = dynamic_cast<Function *>((new Function(*(std::string *) funcDefNode->fun.value, funcBody, parameters, funcDefNode->shouldAutoReturn))->SetContext(ctx)->SetPos(node->st, node->et));
         ctx->symbols->Set(*(std::string *) funcDefNode->fun.value, function);
+
+        for (auto &fv : funcDefNode->cellVars) {
+            function->cellVars.push_back(*(std::string *) fv->freeVar.value);
+        }
+
+        if (ctx->parent != nullptr) {
+            for (auto &fv : funcDefNode->freeVars) {
+                auto fvName = *(std::string *) fv->freeVar.value;
+                auto fvValue = ctx->symbols->Get(fvName);
+                if (fvValue == nullptr) {
+                    return result->Failure(new RuntimeError(
+                        std::format("'{}' is not a valid freevar", fvName),
+                        fv->st, fv->et, ctx
+                    ));
+                }
+                function->closureVarsTable->Set(fvName, fvValue);
+            }
+        }
+        return result->Success(function);    
     }
-    return result->Success(function);
 }
 
 RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
+    if (overflowCount >= INVILID_OVERFLOW_TOLERANCE) {
+        std::cerr << "Fatal: Stack corrupted" << std::endl;
+        std::cerr << "[Native Stack Info]" << std::endl;
+        std::cerr << RuntimeError::GetNativeCallStackInfo() << std::endl;
+        assert(false);
+    }
+
     auto result = new RuntimeResult;
     auto funcCallNode = dynamic_cast<FunctionCallNode *>(node);
     std::vector<Object *> args;
     currentCallStackDepth++;
     if (currentCallStackDepth >= MAX_CALLSTACK_DEPTH) {
         currentCallStackDepth = 0;
+        overflowCount++;    
         return result->Failure(new RuntimeError(
             std::format("Maximum call stack depth ({}) exceeded, recompile the source and change MAX_CALLSTACK_DEPTH to extend stack capacity", MAX_CALLSTACK_DEPTH),
             node->st, node->et, ctx
         ));
     }
+    
+    // if (ctx->interpreter) {
+    //     ctx->interpreter->callStack->push_back(ctx);
+    // }
         
     auto functionTarget = result->Register(this->Visit(funcCallNode->target, ctx));
     if (result->ShouldReturn()) {
@@ -5689,71 +6382,92 @@ RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
         }
     }
     
-    if (functionTarget->typeName != "Function" && functionTarget->typeName != "BuiltinFunction" && functionTarget->typeName != "Method" && functionTarget->typeName != "ClassObject" && functionTarget->typeName != std::string("BuiltinMethod")) {
-        return result->Failure(new TypeError(
-            std::format("'{}' object is not callable", functionTarget->typeName),
-            node->st, node->et, ctx
-         ));
+    // if (functionTarget->typeName != "Function" && functionTarget->typeName != "BuiltinFunction" && functionTarget->typeName != "Method" && functionTarget->typeName != "ClassObject" && functionTarget->typeName != std::string("BuiltinMethod")) {
+    //     return result->Failure(new TypeError(
+    //         std::format("'{}' object is not callable", functionTarget->typeName),
+    //         node->st, node->et, ctx
+    //      ));
+    // } else {
+    Object *returnValue;
+    if (functionTarget->typeName == "Function") {
+        auto target = dynamic_cast<Function *>(functionTarget);
+        auto returnValueTmp = result->Register(target->Execute(args));
+        if (result->ShouldReturn()) {
+            return result;
+        }
+        returnValue = returnValueTmp;
+    } else if (functionTarget->typeName == "BuiltinFunction") {
+        auto returnValueTmp = result->Register((dynamic_cast<BuiltinFunction *>(functionTarget))->Execute(args));
+        if (result->ShouldReturn()) {
+            return result;
+        }
+        returnValue = returnValueTmp;
+    // } else if (functionTarget->typeName == "ClassObject") {
+    //     auto [ctor, error] = dynamic_cast<ClassObject *>(functionTarget)->GetAttr("__init__");
+    //     if (error != nullptr) {
+    //         return result->Failure(new TypeError(
+    //             std::format("Prototype of object '{}' has no constructor", As<ClassObject>(functionTarget)->className),
+    //             node->st, node->et, ctx
+    //         ));
+    //     }
+    //     if (ctor->typeName != "Function") {
+    //         return result->Failure(new TypeError(
+    //             "Constructor is not callable",
+    //             node->st, node->et, ctx
+    //         ));
+    //     }
+    //     auto returnValueTmp = functionTarget->Copy();
+    //     auto boundedCtor = Method::FromFunction(As<Function>(ctor), returnValueTmp, "__init__");
+    //     boundedCtor->SetPos(node->st, node->et)->SetContext(ctx);
+    //     result->Register(boundedCtor->Execute(args));
+    //     if (result->ShouldReturn()) {
+    //         return result;
+    //     }
+    //     As<ClassObject>(returnValueTmp)->isProto = false;
+    //     returnValue = returnValueTmp;
+    } else if (functionTarget->typeName == "ClassObject") {
+        return result->Success(functionTarget);
     } else {
-        Object *returnValue;
-        if (functionTarget->typeName == "Function") {
-            auto returnValueTmp = result->Register((dynamic_cast<Function *>(functionTarget))->Execute(args));
+        if (functionTarget->typeName == "Method") {
+            auto returnValueTmp = result->Register((dynamic_cast<Method *>(functionTarget))->Execute(args));
             if (result->ShouldReturn()) {
                 return result;
             }
             returnValue = returnValueTmp;
-        } else if (functionTarget->typeName == "BuiltinFunction") {
+        } else if (functionTarget->typeName == std::string("BuiltinMethod")) {
             auto returnValueTmp = result->Register((dynamic_cast<BuiltinFunction *>(functionTarget))->Execute(args));
             if (result->ShouldReturn()) {
                 return result;
             }
             returnValue = returnValueTmp;
-        // } else if (functionTarget->typeName == "ClassObject") {
-        //     auto [ctor, error] = dynamic_cast<ClassObject *>(functionTarget)->GetAttr("__init__");
-        //     if (error != nullptr) {
-        //         return result->Failure(new TypeError(
-        //             std::format("Prototype of object '{}' has no constructor", As<ClassObject>(functionTarget)->className),
-        //             node->st, node->et, ctx
-        //         ));
-        //     }
-        //     if (ctor->typeName != "Function") {
-        //         return result->Failure(new TypeError(
-        //             "Constructor is not callable",
-        //             node->st, node->et, ctx
-        //         ));
-        //     }
-        //     auto returnValueTmp = functionTarget->Copy();
-        //     auto boundedCtor = Method::FromFunction(As<Function>(ctor), returnValueTmp, "__init__");
-        //     boundedCtor->SetPos(node->st, node->et)->SetContext(ctx);
-        //     result->Register(boundedCtor->Execute(args));
-        //     if (result->ShouldReturn()) {
-        //         return result;
-        //     }
-        //     As<ClassObject>(returnValueTmp)->isProto = false;
-        //     returnValue = returnValueTmp;
-        } else if (functionTarget->typeName == "ClassObject") {
-            return result->Success(functionTarget);
         } else {
-            if (functionTarget->typeName == "Method") {
-                auto returnValueTmp = result->Register((dynamic_cast<Method *>(functionTarget))->Execute(args));
-                if (result->ShouldReturn()) {
-                    return result;
-                }
-                returnValue = returnValueTmp;
-            } else if (functionTarget->typeName == std::string("BuiltinMethod")) {
-                auto returnValueTmp = result->Register((dynamic_cast<BuiltinFunction *>(functionTarget))->Execute(args));
-                if (result->ShouldReturn()) {
-                    return result;
-                }
-                returnValue = returnValueTmp;
-            } else {
-                assert(false);
+            auto returnValueTmp = result->Register((functionTarget->Execute(args)));
+            if (result->ShouldReturn()) {
+                return result;
             }
+            returnValue = returnValueTmp;
         }
-        
-        currentCallStackDepth--;
-        return result->Success(returnValue->Copy()->SetPos(node->st, node->et)->SetContext(ctx));
     }
+    
+    currentCallStackDepth--;
+    return result->Success(returnValue->Copy()->SetPos(node->st, node->et)->SetContext(ctx));
+    // }
+}
+
+RuntimeResult *Interpreter::VisitNonlocal(NodeBase *node, Context *ctx) {
+    auto result = new RuntimeResult;
+    auto nlNode = dynamic_cast<NonlocalStatementNode *>(node);
+    auto fvName = *(std::string *) nlNode->freeVar.value;
+    auto fvValue = ctx->nonlocals->Get(fvName);
+
+    if (fvValue == nullptr) {
+        return result->Failure(new RuntimeError(
+            std::format("'{}' is not a valid cellvar", fvName),
+            node->st, node->et, ctx
+        ));
+    }
+    ctx->symbols->Set(fvName, fvValue);
+    return result->Success(Number::null);
 }
 
 RuntimeResult *Interpreter::VisitString(NodeBase *node, Context *ctx) {
@@ -5999,85 +6713,222 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
         return result;
     }
     auto attr = *(std::string *) attrNode->attr.value;
+    auto calls = attrNode->calls;
+    
+    auto TryGenerateMethod = [=, &result](Object *v, Object *self, const std::string attr) -> Object * {
+        if (v->typeName == "Function") {
+            if (As<Function>(v)->parameters.size() > 0) {
+                if (As<Function>(v)->parameters[0] == "self" || As<Function>(v)->parameters[0] == "this") {
+                    auto method = Method::FromFunction(As<Function>(v), self, attr)->SetPos(node->st, node->et)->SetContext(ctx);    
+                    return method; 
+                }
+            }       
+        }
+        return v;
+    };
+
     if (attrNode->assignment == nullptr) {
-        auto v = var->GetAttr(attr);
-        if (v.second != nullptr) {
-            auto err = v.second;
-            err->st = node->st;
-            err->et = node->et;
-            return result->Failure(err);
+        Object *v;
+        if (calls.find(0) != calls.end()) {
+            auto va = var->GetAttr(attr);
+            if (va.first == nullptr) {
+                return result->Failure(va.second);
+            }
+            ctx->symbols->Set(std::format("__@attrCall_{}__", *(std::string *) attrNode->attr.value), 
+                TryGenerateMethod(var->GetAttr(attr).first, var, attr));
+            v = result->Register(this->Visit(calls[0], ctx));
+            if (result->ShouldReturn()) {
+                return result;
+            }
+            v = v->SetContext(ctx)->SetPos(node->st, node->et);
+            if (attrNode->subAttrs.size() == 0) {
+                return result->Success(v);
+            }
+        } else {
+            auto vp = var->GetAttr(attr);
+            v = vp.first;        
+            if (vp.second != nullptr) {
+                auto err = vp.second;
+                err->st = node->st;
+                err->et = node->et;
+                ((RuntimeError *) err)->SetContext(ctx);
+                return result->Failure(err);
+            }
+
+            if (attrNode->subAttrs.size() == 0) {
+                if (vp.first->typeName == "Function") {
+                    if (As<Function>(vp.first)->parameters.size() > 0) {
+                        if (As<Function>(vp.first)->parameters[0] == "self" || As<Function>(vp.first)->parameters[0] == "this") {
+                            auto method = Method::FromFunction(As<Function>(vp.first), var, attr);    
+                            return result->Success(method); 
+                        }
+                    }       
+                }
+                return result->Success(vp.first->SetContext(ctx)->SetPos(node->st, node->et));
+            }
         }
 
-        if (attrNode->subAttrs.size() == 0) {
-            if (v.first->typeName == "Function") {
-                if (As<Function>(v.first)->parameters.size() > 0) {
-                    if (As<Function>(v.first)->parameters[0] == "self" || As<Function>(v.first)->parameters[0] == "this") {
-                        auto method = Method::FromFunction(As<Function>(v.first), var, attr);    
-                        return result->Success(method); 
-                    }
-                }       
-            }
-            return result->Success(v.first);
-        }
-        Object *tmp = v.first;
+        Object *tmp = v;
         Object *self = nullptr;
+        std::string ls {};
+        int callId = 1;
         for (auto i : attrNode->subAttrs) {
             auto subsciptionLayerResult = tmp->GetAttr(*(std::string *) i.value);
             if (subsciptionLayerResult.second != nullptr) {
                 auto err = subsciptionLayerResult.second;
                 err->st = node->st;
                 err->et = node->et;
+                ((RuntimeError *) err)->SetContext(ctx);
                 return result->Failure(err);
             }
-            if (*(std::string *) i.value == *(std::string *) attrNode->subAttrs[attrNode->subAttrs.size() - 1].value) {
-                self = tmp;
+            if (calls.find(callId) != calls.end()) {
+                ctx->symbols->Set(std::format("__@attrCall_{}__", *(std::string *) i.value), 
+                    TryGenerateMethod(subsciptionLayerResult.first, tmp, *(std::string *) i.value));
+                auto layerResult = result->Register(this->Visit(calls[callId], ctx));
+                if (result->ShouldReturn()) {
+                    return result;
+                }
+                tmp = layerResult->SetContext(ctx)->SetPos(node->st, node->et);
+                
+            } else {
+                ls = *(std::string *) attrNode->subAttrs[attrNode->subAttrs.size() - 1].value;
+                if (*(std::string *) i.value == ls) {
+                    self = tmp;
+                }
+                tmp = subsciptionLayerResult.first->SetContext(ctx)->SetPos(node->st, node->et);
             }
-            tmp = subsciptionLayerResult.first;
+            callId++;
         }
-        if (tmp->typeName == "Function") {
-           if (As<Function>(tmp)->parameters[0] == "self" || As<Function>(tmp)->parameters[0] == "this") {
-                auto method = Method::FromFunction(As<Function>(v.first), var, attr);    
-                return result->Success(method); 
-            }    
-        }
-        return result->Success(tmp);  
+        // if (tmp->typeName == "Function") {
+        //    if (As<Function>(tmp)->parameters[0] == "self" || As<Function>(tmp)->parameters[0] == "this") {
+        //         auto method = Method::FromFunction(As<Function>(tmp), self, ls);    
+        //         return result->Success(method); 
+        //     }    
+        // }
+        return result->Success(tmp->SetContext(ctx)->SetPos(node->st, node->et));  
     } else {
+        Object *v;        
+        if (attrNode->calls.find(attrNode->subAttrs.size() - 1) != attrNode->calls.end()) {
+            return result->Failure(new RuntimeError(
+                "Unable to assign a new value a function return value (rvalue)",
+                node->st, node->et, ctx
+            ));
+        }
+        
         auto expr = result->Register(this->Visit(attrNode->assignment, ctx));
         if (result->ShouldReturn()) {
             return result;
         }
-        auto v = var->SetAttr(attr, expr);
-        if (v.second != nullptr) {
-            auto err = v.second;
-            err->st = node->st;
-            err->et = node->et;
-            return result->Failure(err);
-        }
-
-        if (attrNode->subAttrs.size() == 0) {
-            return result->Success(Number::null);
-        }
-        Object *tmp = v.first;
-        Object *self = nullptr;
-        for (auto i : attrNode->subAttrs) {
-            auto subsciptionLayerResult = tmp->GetAttr(*(std::string *) i.value);
-            if (subsciptionLayerResult.second != nullptr) {
-                auto err = subsciptionLayerResult.second;
+        
+        if (attrNode->subAttrs.size() != 0) {
+            auto vp = var->GetAttr(attr);
+            v = vp.first;        
+            if (vp.second != nullptr) {
+                auto err = vp.second;
                 err->st = node->st;
                 err->et = node->et;
+                ((RuntimeError *) err)->SetContext(ctx);
                 return result->Failure(err);
             }
-            if (*(std::string *) i.value == *(std::string *) attrNode->subAttrs[attrNode->subAttrs.size() - 2].value) {
-                self = tmp;
+
+            Object *tmp = v;
+            Object *self = nullptr;
+            std::string ls {};
+            int callId = 1;
+            for (auto i : attrNode->subAttrs) {
+                auto subsciptionLayerResult = tmp->GetAttr(*(std::string *) i.value);
+                if (subsciptionLayerResult.second != nullptr) {
+                    auto err = subsciptionLayerResult.second;
+                    err->st = node->st;
+                    err->et = node->et;
+                   ((RuntimeError *) err)->SetContext(ctx);            
+                    return result->Failure(err);
+                }
+                if (calls.find(callId) != calls.end()) {
+                    ctx->symbols->Set(std::format("__@attrCall_{}__", *(std::string *) i.value), 
+                        TryGenerateMethod(subsciptionLayerResult.first, tmp, *(std::string *) i.value));
+                    auto layerResult = result->Register(this->Visit(calls[callId], ctx));
+                    if (result->ShouldReturn()) {
+                        return result;
+                    }
+                    tmp = layerResult;
+                } else {
+                    ls = *(std::string *) attrNode->subAttrs[attrNode->subAttrs.size() - 1].value;
+                    if (*(std::string *) i.value == ls) {
+                        self = tmp;
+                    }
+                    tmp = subsciptionLayerResult.first;
+                }
+                callId++;
             }
-            tmp = subsciptionLayerResult.first;
+
+            auto r = self->SetAttr(*(std::string *) attrNode->subAttrs[attrNode->subAttrs.size() - 1].value, expr);
+            if (r.second != nullptr) {
+                auto err = r.second;
+                err->st = node->st;
+                err->et = node->et;
+                ((RuntimeError *) err)->SetContext(ctx);
+                return result->Failure(err);
+            }
+            return result->Success(Number::null);
+        } else {
+            auto rv = var->SetAttr(attr, expr);
+            if (rv.second != nullptr) {
+                auto err = rv.second;
+                err->st = node->st;
+                err->et = node->et;
+                ((RuntimeError *) err)->SetContext(ctx);
+                return result->Failure(err);
+            }
+            return result->Success(Number::null);
         }
+    }
+}
+
+RuntimeResult *Interpreter::VisitAttributionCall(NodeBase *node, Context *ctx) {
+    auto result = new RuntimeResult;
+    auto callNode = dynamic_cast<AttributionCallNode *>(node);
+    std::vector<Object *> args;
+
+    auto callv = std::format("__@attrCall_{}__", *(std::string *) dynamic_cast<VariableAccessNode *>(callNode->call->target)->variableNameToken.value);
+    auto o = ctx->symbols->Get(callv);
+    if (o == nullptr) {
+        std::cerr << "Internal interpreter error: Couldn't get attribution call" << std::endl;
+        std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;
+        assert(false);
+    }
+
+    currentCallStackDepth++;
+    if (currentCallStackDepth >= MAX_CALLSTACK_DEPTH) {
+        currentCallStackDepth = 0;
+        return result->Failure(new RuntimeError(
+            std::format("Maximum call stack depth ({}) exceeded, recompile the source and change MAX_CALLSTACK_DEPTH to extend stack capacity", MAX_CALLSTACK_DEPTH),
+            node->st, node->et, ctx
+        ));
+    }
+
+     for (auto &arg : callNode->call->arguments) {
+        auto v1 = result->Register(this->Visit(arg, ctx));
+        if (v1 != nullptr) {
+            v1->SetPos(node->st, node->et)->SetContext(ctx);
+        }
+        args.push_back(v1);
         if (result->ShouldReturn()) {
+            result->error->st = node->st;
+            result->error->et = node->et;
+            ((RuntimeError *) result->error)->SetContext(ctx);
             return result;
         }
-        self->SetAttr(*(std::string *) attrNode->subAttrs[attrNode->subAttrs.size() - 1].value, expr);
-        return result->Success(Number::null);
     }
+
+    auto v = result->Register(o->Execute(args));
+    if (result->ShouldReturn()) {
+        return result;
+    }
+    
+    ctx->symbols->Remove(callv);
+    currentCallStackDepth--;
+    return result->Success(v->SetContext(ctx)->SetPos(node->st, node->et));
 }
 
 RuntimeResult *Interpreter::VisitAdvancedVarAccess(NodeBase *node, Context *ctx) {
@@ -6091,7 +6942,7 @@ RuntimeResult *Interpreter::VisitAdvancedVarAccess(NodeBase *node, Context *ctx)
             return result;
         }
     }
-    return result->Success(tmp); 
+    return result->Success(tmp->SetContext(ctx)->SetPos(node->st, node->et)); 
 }
 
 RuntimeResult *Interpreter::VisitNewExpression(NodeBase *node, Context *ctx) {
@@ -6116,6 +6967,47 @@ RuntimeResult *Interpreter::VisitNewExpression(NodeBase *node, Context *ctx) {
         }
     }
 
+    if (newNode->newExpr->nodeType == NodeType::AdvancedVarAccess) {
+        auto access = dynamic_cast<AdvancedVarAccessNode *>(newNode->newExpr)->advancedAccess;
+        auto call = access[access.size() - 1];
+        if (call->nodeType != NodeType::Attribution) {
+            std::cerr << "Fatal: Interpreter state error [While instantiating objects: 'invilid node']" << std::endl;
+            std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;        
+            assert(false); 
+        }
+
+        auto caller = dynamic_cast<AttributionNode *>(call)->calls;
+        if (caller.size() > 1) {
+            std::cerr << "Fatal: Interpreter state error [While instantiating objects: 'invalid call']" << std::endl;
+            std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;        
+            assert(false);
+        } else if (caller.size() == 0) {
+            goto instantiate;
+        }
+
+        std::vector<int> positions;
+        for (const auto &[idx, call] : caller) {
+            positions.emplace_back(idx);
+        }
+
+        // get the last call
+        AttributionCallNode *nd = dynamic_cast<AttributionCallNode *>(caller[*std::max_element(positions.begin(), positions.end())]);
+        
+        for (auto &arg : nd->call->arguments) {
+            args.push_back(result->Register(this->Visit(arg, ctx)));
+            if (result->ShouldReturn()) {
+                return result;
+            }
+        }
+
+        for (auto n : dynamic_cast<AdvancedVarAccessNode *>(newNode->newExpr)->advancedAccess) {
+            if (n->nodeType == NodeType::Attribution) {
+                dynamic_cast<AttributionNode *>(n)->calls.clear();
+            }
+        }
+    }
+
+instantiate:
     auto functionTarget = result->Register(this->Visit(newNode->newExpr, ctx));
 
     if (result->ShouldReturn()) {
@@ -6142,7 +7034,7 @@ RuntimeResult *Interpreter::VisitNewExpression(NodeBase *node, Context *ctx) {
         ));
     }
     auto returnValueTmp = functionTarget->Copy();
-    auto boundedCtor = Method::FromFunction(As<Function>(ctor), returnValueTmp, "__init__");
+    auto boundedCtor = Method::FromFunction(As<Function>(ctor), returnValueTmp, std::format("{}.__init__", dynamic_cast<ClassObject *>(functionTarget)->className));
     boundedCtor->SetPos(node->st, node->et)->SetContext(ctx);
     result->Register(boundedCtor->Execute(args));
     if (result->ShouldReturn()) {
@@ -6158,6 +7050,35 @@ RuntimeResult *Interpreter::VisitNewExpression(NodeBase *node, Context *ctx) {
 [[noreturn]] RuntimeResult *Interpreter::VisitEmpty(NodeBase *node, Context *ctx) {
     std::cerr << "Fatal: Invilid node" << std::endl;
     assert(false);
+}
+
+RuntimeResult *Interpreter::VisitDefer(NodeBase *node, Context *ctx) {
+    auto result = new RuntimeResult;
+    // auto currentFrame = ctx->symbols->Get(ctx->ctxLabel);
+    // if (currentFrame == nullptr) {
+    //     return result->Failure(new RuntimeError(
+    //         "'defer' statement outside a valid frame",
+    //         node->st, node->et, ctx
+    //     ));
+    // }
+    currentCallStackDepth++;
+    // if (currentFrame->typeName != std::string("Function") && currentFrame->typeName != std::string("Method")) {
+    //     return result->Failure(new RuntimeError(
+    //         "frame is not callable",
+    //         node->st, node->et, ctx
+    //     ));
+    // }
+
+    if (currentCallStackDepth >= MAX_CALLSTACK_DEPTH) {
+        currentCallStackDepth = 0;
+        return result->Failure(new RuntimeError(
+            std::format("Maximum call stack depth ({}) exceeded, recompile the source and change MAX_CALLSTACK_DEPTH to extend stack capacity", MAX_CALLSTACK_DEPTH),
+            node->st, node->et, ctx
+        ));
+    }
+    
+    ctx->deferNodes.push_back(node);
+    return result->Success(Number::null);
 }
 
 Interpreter::~Interpreter() = default;
@@ -6179,7 +7100,7 @@ void Initialize() {
 bool startAsShell = false;
 
 void Interprete(const std::string &file, const std::string &text, InterpreterStartMode mode, const std::string &frameId, Context *parent, Position *parentEntry) {
-    auto lexer = new Lexer(file, text);
+    auto lexer = new Lexer(file, ToWideString(text));
     auto result = lexer->MakeTokens();
     if (result.second != nullptr) {
         std::cerr << result.second->ToString() << std::endl;
@@ -6206,6 +7127,7 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
     if (mode != InterpreterStartMode::Evaluation) {
         context = new Context("<module>");
         context->symbols = globalSymbolTable;    
+        context->interpreter = interpreter;
     } else {
         context = new Context(frameId);
         context->parent = parent;
@@ -6219,7 +7141,11 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
             return; 
         } else {
             std::cerr << n->cause->ToString() << std::endl;
-            std::cerr << std::endl << "Above exception is the direct cause of the following exception: " << std::endl << std::endl;
+            if (n->extraInfo == "") {
+                std::cerr << std::endl << "Above exception is the direct cause of the following exception: " << std::endl << std::endl;
+            } else {
+                std::cerr << std::endl << n->extraInfo << std::endl << std::endl;
+            }
             std::cerr << n->error->ToString() << std::endl;
             return;
         }
@@ -6227,13 +7153,14 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
 
     if (n->value != nullptr) {
         if (n->value->typeName == "String") {
+            // It may be impossible to reach here ...
             dynamic_cast<String *>(n->value)->Representation();
         } else {
             int resultCount = std::get<int>(As<Number>(n->value->Len().first)->value);
             if (resultCount == 1) {
                 if (mode == InterpreterStartMode::Repl) {
                     auto o = As<List>(n->value)->elements[0];
-                    if (o->typeName == "String") {
+                    if (o->typeName == std::string("String")) {
                         std::cout << "= ";
                         As<String>(o)->Representation();
                     } else {
@@ -6241,7 +7168,7 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
                     }
                 } else if (mode == InterpreterStartMode::Evaluation && startAsShell) {
                     auto o = As<List>(n->value)->elements[0];
-                    if (o->typeName == "String") {
+                    if (o->typeName == std::string("String")) {
                         std::cout << std::format("[@{}]= ", frameId);
                         As<String>(o)->Representation(); 
                     } else {
@@ -6249,7 +7176,7 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
                     }
                 } else if (mode == InterpreterStartMode::Evaluation && !startAsShell) {
                     auto o = As<List>(n->value)->elements[0];
-                    if (o->typeName == "String") {
+                    if (o->typeName == std::string("String")) {
                         As<String>(o)->Representation();
                     } else {
                         std::cout << As<List>(n->value)->elements[0]->ToString() << std::endl;
@@ -6259,7 +7186,7 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
                 for (int i = 0; i < resultCount; i++) {
                     if (mode == InterpreterStartMode::Repl) {
                         auto o = As<List>(n->value)->elements[i];
-                        if (o->typeName == "String") {
+                        if (o->typeName == std::string("String")) {
                             std::cout << std::format("[#{}]= ", i + 1);
                             As<String>(o)->Representation(); 
                         } else {
@@ -6268,7 +7195,7 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
                         // std::cout << std::format("[#{}]= ", i + 1) << As<List>(n->value)->elements[i]->ToString() << std::endl;
                     } else if (mode == InterpreterStartMode::Evaluation && startAsShell) {
                         auto o = As<List>(n->value)->elements[i];
-                        if (o->typeName == "String") {
+                        if (o->typeName == std::string("String")) {
                             std::cout << std::format("[#{}, @{}]= ", i + 1, frameId);
                             As<String>(o)->Representation(); 
                         } else {
@@ -6277,7 +7204,7 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
                         // std::cout << std::format("[#{}, @{}]= ", i + 1, frameId) << As<List>(n->value)->elements[i]->ToString() << std::endl;
                     } else if (mode == InterpreterStartMode::Evaluation && !startAsShell) {
                         auto o = As<List>(n->value)->elements[i];
-                        if (o->typeName == "String") {
+                        if (o->typeName == std::string("String")) {
                             As<String>(o)->Representation(); 
                         } else {
                             std::cout << o->ToString() << std::endl;                    
@@ -6317,9 +7244,6 @@ void Finalize() {
     delete globalSymbolTable;
 
     for (auto [builtinName, builtin] : allBuiltins) {
-        // if (debug) {
-        //     std::cout << "[DEBUG Finalizing] Deleting builtin instance '" << builtinName << "' at " << (void *) builtin << std::endl;
-        // }
         delete builtin;
     }
 
@@ -6331,7 +7255,11 @@ void Finalize() {
             }
             dlclose(dylib);
         #elif defined(_WIN32)
-            ;
+            auto moduleFinalizer = win32::GetProcAddress(dylib, "Yan_OnDestroy");
+            if (module != nullptr) {
+                ((void (*)()) moduleFinalizer)();
+            }
+            win32::FreeLibrary(dylib);
         #endif
     }
 

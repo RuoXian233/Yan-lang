@@ -1,0 +1,11 @@
+var split = require('@string._Split')
+var _format = require('@string.Format')
+var toCharArray = require('@string.ToCharArray')
+var sub = require('@string.Sub')
+var replace = require('@string.Replace')
+var startsWith = require('@string.StartsWith')
+var endsWith = require('@string.EndsWith')
+var repeat = require('@string.Repeat')
+var substitute = require('@string.Substitute')
+
+function format(fmt, _args_) -> _format(fmt, args)

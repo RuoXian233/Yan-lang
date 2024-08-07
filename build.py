@@ -4,7 +4,7 @@ import os
 
 INTERPRETER_SRC = 'yan-main.cpp'
 INTERPRETER_BIN = 'yan'
-MODULES = ['rand', 'fs']
+MODULES = ['rand', 'fs', 'string', 'inspect']
 CC_LINUX = 'g++'
 CC_WIN32 = 'x86_64-w64-mingw32-g++'
 CXX_STANDARD = 'c++20'
@@ -28,6 +28,7 @@ if __name__ == '__main__':
                 # f.write(f'{CC} -std={CXX_STANDARD} {DEBUG} {INTERPRETER_SRC} {FLAGS_MAIN} -o lib{INTERPRETER_BIN}.so\n')
                 f.write(f'echo \'  {CC_LINUX} -std={CXX_STANDARD} {DEBUG} {INTERPRETER_SRC} {FLAGS_INTERPRETER} -o {INTERPRETER_BIN}\'\n')
                 f.write(f'{CC_LINUX} -std={CXX_STANDARD} {DEBUG} {INTERPRETER_SRC} {FLAGS_INTERPRETER} -o {INTERPRETER_BIN}\n')
+
                 for index, module in enumerate(MODULES):
                     f.write(f'echo \'Building library "{module}" ... ({index + 2} / {total}) -> yan-{module}.so\'\n')
                     f.write(f'echo \'  {CC_LINUX} -std={CXX_STANDARD} {DEBUG} yan-lib{module}.cpp {FLAGS_LIBS} -o {DYLIB_PATH}/yan-{module}.so\'\n')
@@ -42,6 +43,7 @@ if __name__ == '__main__':
                 # f.write(f'{CC} -std={CXX_STANDARD} {DEBUG} {INTERPRETER_SRC} {FLAGS_MAIN} -o lib{INTERPRETER_BIN}.so\n')
                 f.write(f'echo \'  {CC_WIN32} -std={CXX_STANDARD} {DEBUG} {INTERPRETER_SRC} {FLAGS_INTERPRETER_WIN32} -o {INTERPRETER_BIN}.exe\'\n')
                 f.write(f'{CC_WIN32} -std={CXX_STANDARD} {DEBUG} {INTERPRETER_SRC} {FLAGS_INTERPRETER_WIN32} -o {INTERPRETER_BIN}.exe\n')
+               
                 for index, module in enumerate(MODULES):
                     f.write(f'echo \'Building library "{module}" ... ({index + 2} / {total}) -> yan-{module}.dll\'\n')
                     f.write(f'echo \'  {CC_WIN32} -std={CXX_STANDARD} {DEBUG} yan-lib{module}.cpp {FLAGS_LIBS_WIN32} -o {DYLIB_PATH}\\yan-{module}.dll\'\n')

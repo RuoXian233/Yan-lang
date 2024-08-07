@@ -30,7 +30,7 @@
     *4.1 基本语法*
 
     - 变量使用关键字 `var` 定义，与大多数语言不同，只有引用变量可以不带 `var` 关键字，所有赋值操作必须由 `var` 显式说明
-    - 变量的命名符合标识符的规范（但不支持中文变量或unicode字符作为标识符）
+    - 变量的命名符合标识符的规范（除不能以数字开头，不能为保留字，不能使用特殊ascii符号，如:,@等，无其他要求）
     - 变量间互相赋值的行为，由其`可变性`决定
 
     ```javascript
@@ -308,6 +308,7 @@ ____
 
     **for, while, if 语句可以相互嵌套**
     ```javascript
+        // find_num.yan
         // 编写一个查找 [m, n] 内 x 的倍数的程序
         // 导入 math 模块内的 imod 函数到全局命名空间，因为要使用求余运算
         // import 是一个内置函数，用于导入模块
@@ -317,7 +318,7 @@ ____
         var m = 1
         var n = 100
 
-        for i = m to n then
+        for i = m to n + 1 then
             // 若 i % x 为 0，则 i 为 x 的倍数
             // 这里也可以等价写成 if not mod(i, x) then ...
             if mod(i, x) == 0 then
@@ -328,4 +329,258 @@ ____
     ```
 
 6. Yan 列表及字符串
+
+    6.1 列表
+
+    - Yan 列表是一种动态大小，且可存储任意类型的数据结构，我们通过实例来了解列表的使用
+    - 列表的操作函数均为内置函数
+
+    ```javascript
+        // list.yan
+        var lst = [1, 2, 3] // 定义列表，内部元素用逗号分隔
+        println(lst) // 可以直接输出
+
+        // 访问列表中的元素有三种方式
+        var a = lst / 0 // 最古老的一种办法，用内部重载的 '/' 运算符接下标访问 (在 Yan 的 python 子集实现仅支持这种方法)
+
+        // 普通的 [下标] 方法
+        var b = lst[1]
+
+        // for-in 循环
+        for element in lst then
+            println(element)
+        end
+    ````
+
+    列表支持的基础操作有：
+    - 求长度 **len()**
+    - 增加值 **append() 或 '+'**
+    - 删除指定索引的值 **remove() 或 '-'**
+    - 拼接 **concat() 或 '\*'**
+
+    我们通过实例了解他们的用法
+    ```javascript
+        // list_operation.yan
+        var lst = [1, 2, 3, 4, 5]
+        println(len(lst)) // 求长度
+
+        // 这两种方式的结果都是 lst 变为 [1, 2, 3, 4, 5, 6]
+        append(lst, 6) // 用内置函数修改的是原列表本身
+        var lst = lst + 6 // 用运算符则是创建了一个新的列表并重新赋给 lst
+
+        var lst = ['1', '2', '3']
+        // 其他的操作也同理
+        remove(lst, 0) // lst -> ['2', '3'], 0 代表索引
+        var lst = lst - 0 // lst -> ['2', '3'], 0 同样代表索引
+        concat(lst, ['4', '5', '6'])
+        var lst = lst * ['4', '5', '6']
+
+        // 列表可以嵌套
+        var lst = [[1, 2, 3], ['1', '2', '3']]
+
+        // 嵌套时可以使用多个 [下标] 访问元素
+        println(lst[1][0])
+        // 或者使用运算符，但须加括号指明顺序
+        println((lst / 1) / 0)
+        // 多重 for-in 循环也可以
+        for i in lst then
+            for j in i then
+                println(j)
+            end
+        end
+
+        // 在数学库里，提供了列表求和求积的操作
+        import('math')
+        println(math.sum([1, 2, 3, 4]))
+        println(math.product([1, 2, 3, 4]))
+
+        // 为增强可读性，Yan 无法对字面量进行操作，需要定义为变量，简单的列表索引除外
+        println([1, 2, 3][0]) // 合法
+        println([[1, 2, 3], [4, 5, 6]][0][0]) // 二阶以上操作不合法
+    ```
+
+
+    6.2 Yan 字符串
+
+    - 字符串存储一系列字符，Yan 没有内置的"字符"类型，取而代之的是长度为 1 的字符串
+    - 字符串字面量由 `''` 包括的内容来声明，不可由 `""` 包括
+    - 字符串支持 utf-8
+    - 字符串基本操作可以视为不可变的列表, 以 `'+'` 拼接，仅能用 `[] 或 for 循环`遍历, 不允许 '/'
+
+    ```javascript
+        // strings.yan
+        var str = 'Hello, world!'
+        println(str)
     
+        // 字符串可以索引，索引结果为一个长度为 1 的字符串
+        println(str[0]) // 'H'
+        // 理论上可以无限索引下去，长度为 1 的字符串也可以索引，但是这种写法没有意义
+        println(str[0][0][0][0][0][0]) // 'H'
+        // 同列表一样，无法直接对字面量进行索引操作
+        println('hello'[0]) // 不合法
+
+        // 使用 for-in 循环遍历字符串
+        for character in str then
+            println(character)
+        end
+
+        // 字符串长度同样可以由 len() 获取
+        println(len(str))
+
+        // 拼接字符串, 可以连续拼接，每次拼接会产生一个新的字符串
+        println('1' + '2' + str)
+    ```
+
+    字符串的高阶操作
+
+    - 字符串高阶操作实现在 string 内置库中，等到讲解内置库和导入语法的时候再进行说明
+
+
+7. Yan 函数
+
+    Yan 支持高阶函数，匿名函数，函数嵌套等特性
+    我们从代码学习函数的定义与使用
+
+    7.1 基本语法
+    
+    - lambda 函数定义语法：**function [<函数名>]([<参数名>[, <参数名>]\*]) -> <表达式>**
+    - 普通函数定义语法：**function <函数名>([<参数名>[, <参数名>]\*]) <函数体:语句块> end**
+    - 函数调用语法: **<函数名>([<参数名>[, <参数名>]\*])**
+    - 函数返回值语法: **return [<表达式>]**
+    - 函数若无显式返回或 `return` 关键字后无表达式，默认返回 `0`
+    - 函数参数类型，返回值完全动态
+
+    ```javascript
+        // functions.yan
+        // 定义普通的无参函数
+        function foo()
+            println('Inside foo function!')
+        end
+
+        // 调用函数
+        foo()
+
+        // 定义一个有参函数，有返回值函数
+        // a, b 为形式参数，调用时其值会被替换为传入实参所对应的值
+        function add(a, b)
+            return a + b
+        end
+
+        // 下面这些调用都是合法的，函数完全动态
+        var a1 = add(1, 2)
+        var a2 = add('hello,', ' world!')
+        var a3 = add([1, 2, 3], 4)
+    
+        // 像 println(), 之前用的 typeof(), addressOf(), append() 等均为函数，只不过他们是内置函数
+    
+        function add2(a, b) -> a + b
+        // add2 和 add 是完全等价的
+
+        // 若需定义匿名函数，省略 lambda 函数的函数名即可
+        function(a, b) -> a + b
+    ```
+
+    7.2 高阶函数
+   
+    - 可以将一个函数赋给一个变量，也可以将其作为另一个函数的参数或返回值
+    - 函数赋值仅拷贝对于函数的引用，不复制函数本身
+
+    ```javascript
+        // advanced_functions.yan
+
+        function f()
+            println('Hello, world!')
+        end
+
+        var foo = f
+        // 可以和使用 f 函数一样使用 foo
+        foo()
+
+        // 最常用的函数赋值可能是匿名函数的赋值
+        // 为保证可读性，经常这么书写
+        var toFloat = function(x) -> x + 0.0
+
+        // 说明一下这里的操作
+        // 若希望将整数转为!!近似相等!!(math.isClose 描述的近似相等,不过绝大多数情况下也可以用 ==) 的浮点数，可以直接 + 0.0
+
+
+        // 函数作为函数参数，那么作为参数的函数称为回调函数
+        function callFunc(f)
+            return f()
+        end
+
+        // 那么此时任意无参函数均可以通过这个 'callFunc(f)' 来调用
+        callFunc(f) // f 是上边的那个函数，为实参
+
+        // 函数也可以作为函数返回值
+        // 一般与函数嵌套定义一起使用
+        function produceAdder(x)
+            function adder(v)
+                // 嵌套函数与外部函数作用域独立，adder() 内无法访问到 produceAdder(x) 的参数 x
+                // 使用 nonlocal x 将 adder() 作为一个闭包函数，可以捕获生成其时 x 的值 
+                nonlocal x
+                return v + x
+            end
+            return adder
+        end
+
+        var adder = produceAdder(3)
+        println(adder(2, 3)) // adder 是一个可以让输入值加 3 并输出的函数
+
+        // 直接 println() 函数会输出函数定义时实际的名字和它的地址
+        function g() -> null
+
+        var h = g
+        println(h) // 输出：<function g at 一个地址>，因为 h 只是 g 的一个引用
+    ```
+
+    7.3 变长参数与可选参数
+
+    - 仅有内置函数，部分库函数存在可选参数，C++ 实现的 API 提供了可选参数的声明方法，但是 Yan 语言没有可选参数的声明 (以后可能作为新特性)
+    - 作为弥补，Yan 语言支持了 C++ 实现无法达到的可变参数(变长参数)
+
+    ```javascript
+        // args.yan
+
+        // 可选参数，例如内置的 input() 函数
+        var s1 = input() // 无参，等效于 readLine()
+        var s2 = input('Please input your name: ') // 有参数时为提示符
+        // 其他的内置函数的参数说明在讲解内置函数时提及
+
+        // 变长参数没有单独的语法或关键字，仅由参数名决定
+        // 变长参数声明为: '_ + 变长参数名 + _', 例如 _args_, _num_, _cfg_ 等等
+        
+        function prints(_args_)
+            // 变长参数在入参后解析为一个列表，直接用 for 循环遍历即可
+            for arg in args then
+                println(arg)
+            end
+        end
+
+        // 变长参数可以跟在固定参数后
+        function newList(length, _values_)
+            var lst = []
+            for i = 0 to length then
+                append(lst, values[i])
+            end
+            return lst
+        end1
+
+        // 固定参数必须有值，变长参数可以一个没有
+        var l1 = newList(3, 1, 2, 3) // [1, 2, 3]
+        var l2 = newList(2, 3, 3) // [3, 3]
+        var l3 = newList(100) // []
+
+        // 一个函数最多有一个变长参数，且必须在参数列表的最末尾
+        function error(_args1_, _args2_)
+            return null
+        end // 此函数不合法
+
+        function error2(_args1_, a)
+            return null
+        end // 此函数同样不合法
+    ```
+
+8. Yan 内置函数
+
+

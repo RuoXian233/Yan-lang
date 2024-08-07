@@ -1,6 +1,8 @@
 #include "yan-lang.hpp"
+#include <random>
 
-const std::string moduleName = "rand";
+const std::string moduleName = "rand"; 
+YAN_INITIALIZE_CALL_STACK_INFO();
 
 
 YAN_C_API_START builtins::YanModuleDeclearation YanModule_OnLoad() {
@@ -15,7 +17,13 @@ YAN_C_API_END
 
 
 YAN_C_API_START builtins::YanObject Random(builtins::YanContext ctx) {
-    return (new RuntimeResult)->Success(new Number(rand()));
+    auto randNum = rand();
+    if (randNum == 0) {
+        return (new RuntimeResult)->Success(new Number(0.0));
+    } else if (randNum == 1) {
+        return (new RuntimeResult)->Success(new Number(1.0));
+    }
+    return (new RuntimeResult)->Success(new Number(1.0 / randNum));
 }
 YAN_C_API_END
 
@@ -40,6 +48,14 @@ YAN_C_API_START builtins::YanObject RandInt(builtins::YanContext ctx) {
         ));
     }
 
-    return result->Success(new Number(rand() % builtins::Math::GetInt(b) + builtins::Math::GetInt(a)));
+    std::random_device rd;
+    std::mt19937 generator(rd());
+    auto va = builtins::Math::GetInt(a);
+    auto vb = builtins::Math::GetInt(b);
+    std::uniform_int_distribution<> dist(std::min(va, vb), std::max(va, vb));
+    return result->Success(new Number(dist(generator)));
 }
+YAN_C_API_END
+
+YAN_C_API_START void YanModule_OnDestroy() {}
 YAN_C_API_END

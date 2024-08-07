@@ -4,6 +4,7 @@
 
 
 const std::string moduleName = "fs";
+YAN_INITIALIZE_CALL_STACK_INFO();
 static std::map<std::string, std::shared_ptr<std::fstream>> openedFileStream;
 BuiltinFunction *FileObject_Read = nullptr;
 BuiltinFunction *FileObject_Write = nullptr;
@@ -32,8 +33,7 @@ const int YANFS_FILETYPE_SYM   = 6;
 const int YANFS_INT32_MAX = std::numeric_limits<int>::max();
 
 
-static int YanFs_CheckFileObject_Internal(Object *fileObject) {
-    auto arg = fileObject->GetAttr("name").first;
+static int YanFs_CheckFileObject_Internal(Object *arg) {
     if (arg->typeName != std::string("String")) {
         return YANFS_BROKEN_FILE_OBJECT;
     }
@@ -179,7 +179,7 @@ YAN_C_API_START builtins::YanObject Open(builtins::YanContext ctx) {
     YAN_CONTEXT_DECORATION(Open);
     
     if (arg2 == nullptr) {
-        mode = std::ios::out;
+        mode = std::ios::in;
     } else {
         auto modeString = As<String>(arg2)->s;
         if (modeString == "r") {
@@ -471,8 +471,9 @@ YAN_C_API_START builtins::YanObject FormatSize(builtins::YanContext ctx) {
     for (; mantissa >= 1024.; mantissa /= 1024., ++o);
     ss << std::ceil(mantissa * 10.) / 10. << "BKMGTPE"[o];
     if (!o) {
-        return result->Success(new String("0"));
-    } else  {
+        // return result->Success(new String("0"));
+        return result->Success(new String(ss.str()));    
+    } else {
         ss << "B (" << num << ')';
         return result->Success(new String(ss.str()));
     }
