@@ -1,3 +1,8 @@
 import('inspect')
+import('fs')
 
-println(inspect.parseNativeCallStackInfo(inspect._getNativeCallStackInfo()))
+
+function f()
+end
+
+f()

@@ -552,6 +552,7 @@ ____
         
         function prints(_args_)
             // 变长参数在入参后解析为一个列表，直接用 for 循环遍历即可
+            // 函数体内引用变长参数时去掉两头的下划线
             for arg in args then
                 println(arg)
             end
@@ -582,5 +583,216 @@ ____
     ```
 
 8. Yan 内置函数
+    
+    ***以下参数声明均为 `参数名: 参数类型 [= 默认值]`***
+
+    **含有默认值的参数可以省略**
+    
+    ***内置函数参数名均以 `_` 开头***
+
+    **以下所有未注明的返回 `0` 的函数均指的是 `null` 所代表的值**
+
+    **`Object` 为所有类型的基类，即代表任意类型**
+
+    8.1. IO 函数
+    - `print(_obj)`: 在 `stdout` 输出传入参数的字符串形式 (无追加换行符)
+        - 参数 1： **_obj: Object**
+        - 返回值： 0 (null 指定的值)
+    - `println(_obj)`: 在 `stdout` 输出传入参数的字符串形式 (追加换行符号)
+        - 参数与返回值同 `print(_obj)`
+    - `readLine()`: 从 `stdin` 读取一行输入并以字符串形式返回
+        - 参数：无
+        - 返回值：输入的字符串: **String**
+    - `input(_prompt)`：输出以 _prompt 参数指定的提示符开头，并执行与 `readLine()` 完全一致的读取返回操作
+        - 参数 1: **_prompt: String = ''**
+        - 返回值：输入的字符串: **String**
+        - 引发异常: `TypeError`
+    - `readFile(_filename)`: 以文本形式打开参数 _filename 所指定的文件，并返回其内容的字符串形式
+        - 参数 1: **_filename: String**
+        - 返回值: 文本文件的内容: **String**
+        - 引发异常: `OSError`, `TypeError`, `RuntimeError`
+    - `writeFile(_filename, _str, _mode)`：以文本形式打开参数 _filename 所指定的文件，并向其写入参数 _str 所指定的内容，追加写入亦或是清空写入取决于参数 _mode 所指定的模式
+        - 参数 1: **_filename: String**
+        - 参数 2: **_str: String**
+        - 参数 3: **_mode: String \[其值只能为 'w' 或 'wa'\] = 'w'**
+        - 返回值: 0
+        - 引发异常: 同 `readFile(_filename)`
+    
+    8.2 工具函数
+    - `typeof(_object)`: 以字符串形式获取参数 _object 的值对应的类型
+        - 参数 1: **_object: Object**
+        - 返回值: 类型描述: **String**
+    - `len(_seq)`: 返回参数 _seq 代表的序列的长度
+        - 注释: **序列** 特指重载了 `Len()` 方法的类型，内置的字符串，列表，字典均可视为序列，在非序列类型上使用 `len()` 将引发 `TypeError`
+        - 参数 1: **_seq: Object[impls Len()]**
+        - 返回值: 长度: **Number[Integer]**
+        - 引发异常：`TypeError`
+    - `parseInt(_str)`: 返回参数 _str 指定字符串的整数表达形式，
+    若转换失败，返回 0
+        - 参数 1: **_str: String**
+        - 返回值: 整数值: **Number[Integer]**
+        - 引发异常：`TypeError`
+    - `parseFloat(_str)`: 返回参数 _str 指定字符串的浮点数表达形式，若转换失败，返回 0
+        - 参数 1: **_str: String**
+        - 返回值: 浮点数值: **Number[Floating]**
+        - 引发异常: `TypeError`
+    - `str(_object)`: 返回参数 _object 的字符串形式
+        - 参数 1: **_object: Object**
+        - 返回值：字符串值：**String**
+    - `eval(_code)`: 创建新的执行上下文，解释并运行参数 _code 指定的代码片段，新上下文在代码执行结束后立即销毁
+        - 参数 1: **_code: String**
+        - 返回值: 0
+        - 引发异常: 所有类型的异常
+    - `panic(_cause)`: 引发 `Panic` 类型的异常，参数 _cause 的字符串形式将作为异常的描述信息
+        - 参数 1: **_cause: Object**
+        - 返回值: 不返回
+        - 引发异常: `Panic`
+    - `isInteger(_num)`: 辨别参数指定的值是否为整数值
+        - 参数 1: **_num: Number**
+        - 返回值: 0 或 1 代表的布尔值: **Number**
+        - 引发异常: `TypeError`
+    - `isFloating(_num)`: 等价于 `not isInteger(_num)`
+    - `addressOf(_object)`: 获取参数 _object 指向对象的地址，以十六进制字符串返回
+        - 参数 1: **_object: Object**
+        - 返回值: 字符串地址值: **String**
+    - `del(_varName)`: 从当前上下文符号表中找到字符串`_varName`代表的变量，移除它并释放所在内存空间
+        - 参数 1: **_varName: String**
+        - 返回值：0
+        - 引发异常: `RuntimeError`
+    - `global(_varName, _value)`: 在局部上下文使用时，从全局符号表内查找字符串 `_varName` 代表的变量，并将其跨作用域修改为参数 _value 指定的值
+        - 参数 1: **_varName: String**
+        - 参数 2: **_value: Object**
+        - 返回值: 0
+        - 引发异常: `TypeError`, `RuntimeError`
+    - `builtins()`: 获取一个包含了所有内置函数名的列表
+        - 返回值：`List[String]`
+
+    8.3 列表，映射操作函数
+    - `append(_lst, _val)`: 向参数 _lst 指定的列表追加参数 _val 指定的值
+        - 参数 1: **_lst: List**
+        - 参数 2: **_val: Object**
+        - 返回值: 0
+        - 引发异常: `TypeError`
+    - `remove(_lst, _index)`: 移除参数 _lst 指定的列表索引 _index 位处的值
+        - 参数 1: **_lst: List**
+        - 参数 2: **_index: Number[Integer]**
+        - 返回值: 0
+        - 引发异常: `RuntimeError`, `TypeError`
+
+    - `concat(_lst1, _lst2)`: 拼接参数 _lst2 所指定的列表到 `_lst1` 上
+        - 参数 1: **_lst1: List**
+        - 参数 2: **_lst2: List**
+        - 返回值：0
+        - 引发异常：`TypeError`
+    - `set(_lst, _index, _value)`: 修改参数 _lst 指定的列表 索引 _index 的值为参数 _value 的值
+        - 参数 1: **_lst: List**
+        - 参数 2: **_index: Number[Integer]**
+        - 参数 3: **_value: Object**
+        - 返回值: 0
+        - 引发异常: `RuntimeError`, `TypeError`
+    - `range(_et, _st, _step)`: 返回一个包含了 `[_st, _et)` 且每个元素间隔为 _step 的列表
+        - 参数 1: **_et: Number**
+        - 参数 2: **_st: Number = 0**
+        - 参数 3: **_step: Number = 1**
+        - 返回值：包含区间值的列表: **List**
+        - 引发异常: `TypeError`
+    - `keys(_mapping)`: 返回一个包含了映射所有键值的列表
+        - 注释: **映射** 一般指类对象或字典
+        - 参数 1: **_mapping: Object[impls GetAttr() + SetAttr()]**
+        - 返回值：键值列表：**List[String]**
+        - 引发异常: `TypeError`
+    - `values(_mapping)`: 返回一个包含了映射所有值的列表
+        - 参数，引发异常同`keys(_mapping)`
+        - 返回值: 值列表: **List**
+
+    8.4 数学与计算函数
+    - `sin(x), cos(x), tan(x), ln(x), log(x), abs(x), sqrt(x)`
+        - 参数 1: **x: Number**
+        - 返回值: 计算结果: **Number**
+        - 注释: 更多数学函数参见模块 `math` 的说明
 
 
+9. Yan 文件IO，导入，内置模块与异常
+
+    9.1 文件IO
+    - 文件操作在内置函数与 `fs` 内置模块中均有实现
+    - 内置函数仅允许简单的读取/写入文本文件
+    - `fs` 库同时包含文件系统相关 API
+
+    我们先来看内置函数的使用，这通常是实现快速写入少量内容，一次性读取的最简单的办法
+
+    ```javascript
+        // file_io_builtins.yan
+
+        // 参照上文对于内置函数的说明，readFile, writeFile的使用也非常简单
+        println(readFile('test.txt'))
+        // 以文本形式打开 test.txt, 读取并一次性返回其所有内容，并自动关闭文件流
+
+        var s = readLine()
+        writeFile('content.txt', s)
+        // 从控制台读取输入, 并写入 content.txt
+        // 此时的写入模式为清空写入
+        // 若需要追加写入文件, 在第三个参数指定 'a' 模式即可
+        writeFile('content.txt', s, 'wa')
+        // 第三个模式参数若只写 'w' 与省略等价
+
+        // 大量重复的调用 readFile(), writeFile() 并不是一个理想的实现
+        
+        // 尽量避免以下代码
+        var l = ['1', '2', '3', '4', '5']
+        for i in l then
+            writeFile('nums.txt', i, 'wa')
+        end
+    ```
+
+    现在我们来看 `fs` 库提供的 API
+    - **函数**
+    - `fs.open(file: String, mode: String = 'r') -> FileObject`
+    - `fs.close(fileObject: FileObject) -> null`
+    - `fs.getFileType(path: String) -> Number[Integer]`
+    - `fs.getFilePermissions(path: String) -> String`
+    - `fs.exists(path: String) -> Bool (aka 'Number[Integer]')`
+    - `fs.getFreeSpace(path: String) -> List[String | Number[Integer]]`
+    - `fs.getFileSize(path: String) -> String | Number[Integer]`
+    - `fs.formatSize(size: Number[Integer]) -> String`
+    - `fs.listDirectory(dir: String) -> List[String]`
+    - `fs.getLastWriteTime(path: String) -> String`
+    - `fs.getHardLinksCount(path: String) -> Number[Integer]`
+    - **类对象**
+    - `FileObject`
+        - 属性 **name: String**
+        - 方法 1: **read(this: FileObject) -> String**
+        - 方法 2: **write(this: FileObject, content: String) -> null**
+
+    ```javascript   
+        // file_io_fs.yan
+        // 导入 `fs` 模块
+        // 一般使用 `import` (别的方式在模块说明)
+        import('fs')
+        // 这样导入之后就可以用`模块名.模块内成员`的方式访问模块方法
+        // 打开文件流：使用 fs.open() 函数
+
+        var file = fs.open('test.txt')
+    ```
+
+    **file.open()** 的第二个参数也是模式参数，它的可选模式更多
+    - **'r': 读取文件**
+    - **'w': 写入文件**
+    - **'rw': 可读可写**
+    - **'wa': 追加写入**
+    - **'rb': 二进制读取**
+    - **'wb': 二进制写入**
+    - **'wba': 二进制追加写入**
+    - **缺省: 等价于 'r'**
+
+    组合中字母的顺序不允许调换，除上述 7 种模式符外其余均会引发 `ValueError`
+    ```javascript
+        // 打开文件流后，就可以对文件对象进行操作
+        // 上文是以 文本只读 模式打开的
+        // 调用 file 对象的 read() 方法读取文件中所有内容并返回
+        var content = file.read()
+        // 别忘了手动关闭文件流
+        // 用 fs.close() 函数传入打开的文件对象即可
+         fs.close(file)
+
+    ```

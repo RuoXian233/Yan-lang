@@ -1,7 +1,9 @@
 import('string')
 
 var _getNativeCallStackInfo = require('@inspect.GetNativeCallStackInfo')
-var CallStackInfo = require('@inspect.GetCallStackInfo')
+var getCallStackInfo = require('@inspect.GetCallStackInfo')
+var getLocals = require('@inspect.GetLocals')
+var printLocals = require('@inspect.PrintLocals')
 
 
 function CallStackInfo_init(this, id, content, addr)	

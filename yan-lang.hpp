@@ -1,4 +1,5 @@
-﻿#ifdef _MSC_VER
+﻿#include <utility>
+#ifdef _MSC_VER
     #define _CRT_SECURE_NO_WARNINGS
 #endif
 
@@ -297,6 +298,8 @@ struct Context final {
     SymbolTable *nonlocals;
     std::vector<NodeBase *> deferNodes;
     Interpreter *interpreter;
+    bool external;
+    Context *exFrame;
 
     explicit Context(const std::string &ctxName, Context *parent = nullptr, Position *parentEntry = nullptr) : ctxLabel(ctxName),
         parent(parent), parentEntry(parentEntry)
@@ -309,6 +312,10 @@ struct Context final {
 
     void SetGlobalSymbolTable(SymbolTable *st) {
         this->global = st;
+    }
+    
+    inline void SetExternal(bool e) {
+        this->external = e;
     }
 };
 
@@ -2933,6 +2940,9 @@ struct Object {
 
     virtual Object *SetContext(Context *ctx = nullptr) {
         this->ctx = ctx;
+        if (ctx && ctx->exFrame) {
+            this->ctx->exFrame = ctx->exFrame;
+        }
         return this;
     }
 
@@ -3654,7 +3664,7 @@ struct String : public Object {
     explicit String(const std::string &value) : s(value), Object("String") {}
 
     std::pair<Object *, Error *> AddTo(Object *other) override {
-        if (other->typeName == "String") {
+        if (other->typeName == std::string("String")) {
             auto *o = dynamic_cast<String *>(other);
             return std::make_pair((new String(this->s + o->s))->SetContext(this->ctx)->SetPos(this->startPos, this->endPos), nullptr);
         } else {
@@ -4130,13 +4140,23 @@ struct FunctionBase : virtual public Object {
         if (symbolsModuleLocation.find(this->functionName) == symbolsModuleLocation.end()) {
             auto frameContext = new Context(this->functionName, this->ctx, this->startPos);
             // frameContext->symbols = new SymbolTable(frameContext->global);
-            frameContext->symbols = new SymbolTable(this->ctx->symbols);
+            if (this->ctx && this->ctx->symbols) {
+                frameContext->symbols = new SymbolTable(this->ctx->symbols);
+            } else {
+                frameContext->symbols = new SymbolTable(frameContext->global);
+            }
             frameContext->nonlocals = new SymbolTable;
             // frameContext->symbols->Set(frameContext->parent->ctxLabel, this->ctx->symbols->Get(frameContext->parent->ctxLabel));        
             return frameContext;
         }
         auto ctxTmpl = moduleContextCache.at(symbolsModuleLocation.at(this->functionName));
-        auto frameContext = new Context(this->functionName, ctxTmpl, this->startPos);
+        Context *frameContext = nullptr;
+        if (ctxTmpl->external) {
+            frameContext = new Context(this->functionName, this->ctx, this->startPos);
+        } else {
+            frameContext = new Context(this->functionName, ctxTmpl, this->startPos);
+        }
+
         frameContext->symbols = new SymbolTable(ctxTmpl->symbols);
         frameContext->nonlocals = new SymbolTable;
 
@@ -4408,6 +4428,10 @@ struct ClassObject : public Dictionary {
                 std::string vs;
                 if (v->typeName == std::string("Function")) {
                     vs = "[Function]";
+                } else if (v->typeName == std::string("BuiltinFunction")) {
+                    vs = "[Native Function]";
+                } else if (v->typeName == std::string("BuiltinMethod")) {
+                    vs = "[Native Method]";
                 } else if (v->typeName == std::string("String")) {
                     vs = std::format("'{}'", v->ToString());
                 } else {
@@ -4433,7 +4457,7 @@ struct ClassObject : public Dictionary {
         return copy;
     }
 
-    Object *Instantiate(const std::vector<Object *> &args);
+    Object *Instantiate(const std::vector<Object *> &args, Context *ctx, Position *st, Position *et);
 };
 
 struct Method : public Function {
@@ -5219,6 +5243,7 @@ namespace builtins {
         moduleContext->parent = ctx;        
         moduleContext->parentEntry = st;        
         moduleContext->symbols = new SymbolTable;
+        moduleContext->SetExternal(true);
         SetBuiltins(moduleContext->symbols);
         auto interpreter = new Interpreter;
         result->Register(interpreter->Visit(parseR->ast, moduleContext));
@@ -5714,7 +5739,7 @@ struct BuiltinMethod : public BuiltinFunction {
     }
 };
 
-Object *ClassObject::Instantiate(const std::vector<Object *> &args) {
+Object *ClassObject::Instantiate(const std::vector<Object *> &args, Context *ctx, Position *st, Position *et) {
     auto result = new RuntimeResult;
     auto object = As<ClassObject>(this->Copy());
     object->isProto = false;
@@ -5723,6 +5748,7 @@ Object *ClassObject::Instantiate(const std::vector<Object *> &args) {
     auto unboundedCtor = As<BuiltinFunction>(ctor.first);
     auto boundedCtor = BuiltinMethod::FromBuiltinFunction(unboundedCtor, object);
 
+    object->SetContext(ctx)->SetPos(st, et);
     result->Register(boundedCtor->Execute(args));
     if (result->ShouldReturn()) {
         std::cerr << "Internal interpreter error: " << result->error->name << ": " << result->error->details << std::endl;
@@ -6065,6 +6091,13 @@ RuntimeResult *Interpreter::VisitVarAccessNode(NodeBase *node, Context *ctx) {
         ));
     }
 
+    if (value->ctx) {
+        if (value->ctx->external) {
+            // TODO
+            ;
+        }
+    }
+
     // Object *oldValue = value;
     // mutable types & immutable types ? 
     if (value->typeName != std::string("List") && value->typeName != std::string("Dictionary") && value->typeName != std::string("ClassObject")) {
@@ -6073,6 +6106,7 @@ RuntimeResult *Interpreter::VisitVarAccessNode(NodeBase *node, Context *ctx) {
         value = value->SetPos(nd->st, nd->et)->SetContext(ctx);
     }
     // delete oldValue;
+
     return result->Success(value);
 }
 
@@ -6373,8 +6407,10 @@ RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
         return result;
     }
     // TODO: Memory management here
-    functionTarget = functionTarget->Copy()->SetPos(node->st, node->et)->SetContext(ctx);
-
+    // functionTarget = functionTarget->Copy()->SetPos(node->st, node->et)->SetContext(ctx);
+    // functionTarget = functionTarget->Copy()->SetPos(node->st, node->et);
+    functionTarget = functionTarget->Copy();
+    
     for (auto &arg : funcCallNode->arguments) {
         args.push_back(result->Register(this->Visit(arg, ctx)));
         if (result->ShouldReturn()) {
@@ -6719,7 +6755,13 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
         if (v->typeName == "Function") {
             if (As<Function>(v)->parameters.size() > 0) {
                 if (As<Function>(v)->parameters[0] == "self" || As<Function>(v)->parameters[0] == "this") {
-                    auto method = Method::FromFunction(As<Function>(v), self, attr)->SetPos(node->st, node->et)->SetContext(ctx);    
+                    std::string pa {};
+                    if (self->typeName == std::string("ClassObject")) {
+                        pa = As<ClassObject>(self)->className;
+                    } else if (self->typeName == std::string("Dictionary")) {
+                        pa = "<anonymous>";
+                    }
+                    auto method = Method::FromFunction(As<Function>(v), self, pa + '.' + attr)->SetPos(node->st, node->et)->SetContext(ctx);    
                     return method; 
                 }
             }       
@@ -6734,8 +6776,9 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
             if (va.first == nullptr) {
                 return result->Failure(va.second);
             }
+            (va.first)->SetContext(ctx)->SetPos(node->st, node->et);
             ctx->symbols->Set(std::format("__@attrCall_{}__", *(std::string *) attrNode->attr.value), 
-                TryGenerateMethod(var->GetAttr(attr).first, var, attr));
+                TryGenerateMethod(va.first, var, attr));
             v = result->Register(this->Visit(calls[0], ctx));
             if (result->ShouldReturn()) {
                 return result;
@@ -6782,6 +6825,7 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
                 return result->Failure(err);
             }
             if (calls.find(callId) != calls.end()) {
+                (subsciptionLayerResult.first)->SetContext(ctx)->SetPos(node->st, node->et);
                 ctx->symbols->Set(std::format("__@attrCall_{}__", *(std::string *) i.value), 
                     TryGenerateMethod(subsciptionLayerResult.first, tmp, *(std::string *) i.value));
                 auto layerResult = result->Register(this->Visit(calls[callId], ctx));

@@ -1,14 +1,17 @@
 #include "yan-lang.hpp"
 #include <filesystem>
-#include <limits>
 
 
 const std::string moduleName = "fs";
-YAN_INITIALIZE_CALL_STACK_INFO();
 static std::map<std::string, std::shared_ptr<std::fstream>> openedFileStream;
 BuiltinFunction *FileObject_Read = nullptr;
 BuiltinFunction *FileObject_Write = nullptr;
 BuiltinFunction *FileObject_Init = nullptr;
+BuiltinFunction *FileObject_ReadBuf = nullptr;
+BuiltinFunction *FileObject_Reverse = nullptr;
+BuiltinFunction *FileObject_ReadLines = nullptr;
+BuiltinFunction *FileObject_Length = nullptr;
+BuiltinFunction *FileObject_Eof = nullptr;
 ClassObject *FileObject = nullptr;
 
 
@@ -45,6 +48,15 @@ static int YanFs_CheckFileObject_Internal(Object *arg) {
     return YANFS_NO_ERROR;
 }
 
+static int YanFs_GetFileLength(std::fstream &fs) {
+    fs.seekp(0, std::ios::beg);
+    int st = fs.tellp();
+    fs.seekp(0, std::ios::end);
+    int et = fs.tellp();
+    fs.seekp(0, std::ios::beg);
+    return (int) et - st;
+}
+
 static Error *YanFs_ThrowExc(int excId, Context *ctx, Object *arg) {
     switch (excId) {
     case YANFS_BROKEN_FILE_OBJECT:
@@ -58,6 +70,43 @@ static Error *YanFs_ThrowExc(int excId, Context *ctx, Object *arg) {
         assert(false);
     }
 }
+
+YAN_C_API_START builtins::YanObject YanFs_FileObject_Eof(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    YAN_CONTEXT_DECORATION(FileObject.Read);
+    auto self = ctx->symbols->Get("self");
+    auto arg = self->GetAttr("name").first;
+    
+    int status = YanFs_CheckFileObject_Internal(arg);
+    if (status) {
+        return result->Failure(YanFs_ThrowExc(status, ctx, arg));
+    }
+
+    auto filename = As<String>(arg)->s;
+    auto fileStream = openedFileStream.at(filename);
+
+    bool isEof = fileStream->eof();
+    return result->Success(new Number((int) isEof));
+}
+YAN_C_API_END
+
+YAN_C_API_START builtins::YanObject YanFs_FileObject_Length(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    YAN_CONTEXT_DECORATION(FileObject.Length);
+    
+    auto self = ctx->symbols->Get("self");
+    auto arg = self->GetAttr("name").first;
+    
+    int status = YanFs_CheckFileObject_Internal(arg);
+    if (status) {
+        return result->Failure(YanFs_ThrowExc(status, ctx, arg));
+    }
+
+    auto filename = As<String>(arg)->s;
+    auto fileStream = openedFileStream.at(filename);
+    return result->Success(new Number(YanFs_GetFileLength(*fileStream.get())));
+}
+YAN_C_API_END
 
 YAN_C_API_START builtins::YanObject YanFs_FileObject_Read(builtins::YanContext ctx) {
     auto result = new RuntimeResult;
@@ -77,6 +126,175 @@ YAN_C_API_START builtins::YanObject YanFs_FileObject_Read(builtins::YanContext c
     ss << fileStream->rdbuf();
     content = ss.str();
     return result->Success(new String(content));
+}
+YAN_C_API_END
+
+YAN_C_API_START builtins::YanObject YanFs_FileObject_ReadBuf(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    YAN_CONTEXT_DECORATION(FileObject.ReadBuf);
+    auto self = ctx->symbols->Get("self");
+    auto arg = self->GetAttr("name").first;
+    auto _currentPos = self->GetAttr("pos");
+    
+    if (_currentPos.first == nullptr) {
+        return result->Failure(new RuntimeError(
+            "Broken file object",
+            self->startPos, self->endPos, ctx
+        ), _currentPos.second);
+    }
+    if (_currentPos.first->typeName != std::string("Number")) {
+        return result->Failure(new RuntimeError(
+            "Broken file object",
+            self->startPos, self->endPos, ctx
+        ));
+    }
+    int currentPos = builtins::Math::GetInt(As<Number>(_currentPos.first));
+    auto size = ctx->symbols->Get("__size__");
+
+    size_t s = 1;
+    if (size != nullptr) {
+        if (size->typeName != std::string("Number")) {
+            return result->Failure(new TypeError(
+                "Buffer size should be a positive integer",
+                size->startPos, size->endPos, ctx
+            ));
+        }
+        auto sn = As<Number>(size);
+        if (!builtins::Math::HoldsInteger(sn)) {
+            return result->Failure(new TypeError(
+                "Buffer size should be a positive integer",
+                size->startPos, size->endPos, ctx
+            ));
+        }
+        s = builtins::Math::GetInt(sn);
+        if (s < 1) {
+            return result->Failure(new ValueError(
+                "Buffer size should be a positive integer",
+                size->startPos, size->endPos, ctx
+            ));
+        }
+    }
+    
+    int status = YanFs_CheckFileObject_Internal(arg);
+    if (status) {
+        return result->Failure(YanFs_ThrowExc(status, ctx, arg));
+    }
+
+    auto filename = As<String>(arg)->s;
+    auto fileStream = openedFileStream.at(filename);
+    auto fileLength = YanFs_GetFileLength(*fileStream.get());
+
+    if (currentPos + s > fileLength) {
+        return result->Failure(new OSError(
+            std::format("EOF: {}", filename),
+            size->startPos, size->endPos, ctx
+        ));
+    }
+    
+    fileStream->seekg(currentPos);
+    char *buf = new char[s + 1];
+    fileStream->read(buf, s);
+    fileStream->seekg(currentPos + s);
+    buf[s] = '\0';
+    auto str = std::string(buf);
+    delete buf;
+
+    self->SetAttr("pos", new Number((int) (currentPos + s)));
+    return result->Success(new String(str));
+}
+
+YAN_C_API_END
+
+static inline bool YanFs_IsPositiveInteger(Object *o, bool zeroExcluded = true) {
+    if (o != nullptr) {
+        if (o->typeName == std::string("Number")) {
+            auto n = As<Number>(o);
+            if (builtins::Math::HoldsInteger(n)) {
+                auto v = builtins::Math::GetInt(n);
+                if (!(v < 0 || (v == 0 && zeroExcluded))) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+YAN_C_API_START builtins::YanObject YanFs_FileObject_Reverse(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    auto self = ctx->symbols->Get("self");
+
+    auto arg = self->GetAttr("name").first;
+    auto _currentPos = self->GetAttr("pos");
+
+    if (_currentPos.first == nullptr) {
+        return result->Failure(new RuntimeError(
+            "Broken file object",
+            self->startPos, self->endPos, ctx
+        ), _currentPos.second);
+    }
+    if (_currentPos.first->typeName != std::string("Number")) {
+        return result->Failure(new RuntimeError(
+            "Broken file object",
+            self->startPos, self->endPos, ctx
+        ));
+    }
+    int currentPos = builtins::Math::GetInt(As<Number>(_currentPos.first));
+
+    auto _reverseCount = ctx->symbols->Get("_num");
+    if (!YanFs_IsPositiveInteger(_reverseCount)) {
+        return result->Failure(new ValueError(
+            "Reverse count should be a positive integer",
+            _reverseCount->startPos, _reverseCount->endPos, ctx
+        ));
+    }
+
+    auto reverseCount = builtins::Math::GetInt(As<Number>(_reverseCount));
+    if (currentPos - reverseCount < 0) {
+        return result->Failure(new OSError(
+            "Already reached start of file",
+            self->startPos, self->endPos, ctx
+        ));
+    }
+
+    int status = YanFs_CheckFileObject_Internal(arg);
+    if (status) {
+        return result->Failure(YanFs_ThrowExc(status, ctx, arg));
+    }
+
+    auto filename = As<String>(arg)->s;
+    auto fileStream = openedFileStream.at(filename);
+    fileStream->seekg(currentPos - reverseCount);
+    fileStream->seekp(currentPos - reverseCount);
+    self->SetAttr("pos", new Number((int) (currentPos - reverseCount)));
+    return result->Success(Number::null);
+}
+YAN_C_API_END
+
+YAN_C_API_START builtins::YanObject YanFs_FileObject_ReadLines(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    YAN_CONTEXT_DECORATION(FileObject.Read);
+    auto self = ctx->symbols->Get("self");
+    auto arg = self->GetAttr("name").first;
+    
+    int status = YanFs_CheckFileObject_Internal(arg);
+    if (status) {
+        return result->Failure(YanFs_ThrowExc(status, ctx, arg));
+    }
+
+    auto filename = As<String>(arg)->s;
+    auto fileStream = openedFileStream.at(filename);
+    std::string content;
+    std::stringstream ss;
+    ss << fileStream->rdbuf();
+    content = ss.str();
+    
+    std::vector<Object *> r;
+    auto lines = Split(content, "\n");
+    for (const auto &line : lines) {
+        r.emplace_back(new String(line));
+    }
+    return result->Success(new List(r));
 }
 YAN_C_API_END
 
@@ -108,13 +326,18 @@ YAN_C_API_START builtins::YanObject YanFs_FileObject_Write(builtins::YanContext 
 }
 YAN_C_API_END
 
-
-YAN_C_API_START builtins::YanModuleDeclearation YanModule_OnLoad() {
+YAN_C_API_START builtins::YanModule *YanModule_OnLoad() {
     FileObject_Init = new BuiltinFunction("FileObject_Init");
     FileObject_Init->Bind({ "self", "name" }, YanFs_FileObject_Init);
     FileObject = new ClassObject({
             { new String("name"), nullptr },
+            { new String("pos"), nullptr },
+            { new String("eof"), nullptr },
             { new String("read"), nullptr },
+            { new String("length"), nullptr },
+            { new String("readBuf"), nullptr },
+            { new String("reverse"), nullptr },
+            { new String("readLines"), nullptr },
             { new String("write"), nullptr },
             { new String("__cls__"), new String("FileObject") },
             { new String("__init__"), FileObject_Init }
@@ -124,6 +347,16 @@ YAN_C_API_START builtins::YanModuleDeclearation YanModule_OnLoad() {
     FileObject_Read->Bind({ "self" }, YanFs_FileObject_Read);
     FileObject_Write = new BuiltinFunction("FileObject_Write");
     FileObject_Write->Bind({ "self", "_str" }, YanFs_FileObject_Write);
+    FileObject_ReadBuf = new BuiltinFunction("FileObject_ReadBuf");
+    FileObject_ReadBuf->Bind({ "self", "__size__" }, YanFs_FileObject_ReadBuf);
+    FileObject_Reverse = new BuiltinFunction("FileObject_Reverse");
+    FileObject_Reverse->Bind({ "self", "_num" }, YanFs_FileObject_Reverse);
+    FileObject_Eof = new BuiltinFunction("FileObject_Eof");
+    FileObject_Eof->Bind({ "self" }, YanFs_FileObject_Eof);
+    FileObject_Length = new BuiltinFunction("FileObject_Length");
+    FileObject_Length->Bind({ "self" }, YanFs_FileObject_Length);
+    FileObject_ReadLines = new BuiltinFunction("FileObject_ReadLines");
+    FileObject_ReadLines->Bind({ "self" }, YanFs_FileObject_ReadLines);
 
     auto m = new builtins::YanModule(moduleName);
     m
@@ -147,6 +380,14 @@ YAN_C_API_START void _FileObject_Init_Internal(Object *self, const std::string &
     self->SetAttr("name", new String(name));
     self->SetAttr("read", BuiltinMethod::FromBuiltinFunction(FileObject_Read, self));
     self->SetAttr("write", BuiltinMethod::FromBuiltinFunction(FileObject_Write, self));
+    self->SetAttr("readBuf", BuiltinMethod::FromBuiltinFunction(FileObject_ReadBuf, self));
+    self->SetAttr("reverse", BuiltinMethod::FromBuiltinFunction(FileObject_Reverse, self));
+    self->SetAttr("length", BuiltinMethod::FromBuiltinFunction(FileObject_Length, self));
+    self->SetAttr("readLines", BuiltinMethod::FromBuiltinFunction(FileObject_ReadLines, self));
+    self->SetAttr("eof", BuiltinMethod::FromBuiltinFunction(FileObject_Eof, self));
+    int p = openedFileStream[name]->tellp();
+    self->SetAttr("pos", new Number(p));
+    openedFileStream[name]->seekp(p, std::ios::beg);
 }
 YAN_C_API_END
 
@@ -161,8 +402,7 @@ YAN_C_API_END
 
 YAN_C_API_START builtins::YanObject YanFs_FileObject_New(const std::string &name, Position *st, Position *et, Context *ctx) {
     auto result = new RuntimeResult;
-    auto fileObject = FileObject->Instantiate({ new String(name) });
-    fileObject->SetPos(st, et)->SetContext(ctx);
+    auto fileObject = FileObject->Instantiate({ new String(name) }, ctx, st, et);
     if (result->ShouldReturn()) {
         return result;
     }
@@ -190,6 +430,21 @@ YAN_C_API_START builtins::YanObject Open(builtins::YanContext ctx) {
             mode = std::ios::out | std::ios::app;
         } else if (modeString == "wr") {
             mode = std::ios::in | std::ios::out;
+        } else if (modeString == "wb") {
+            return result->Failure(new RuntimeError(
+                "Binary IO not implemented yet",
+                arg2->startPos, arg2->endPos, ctx
+            ));
+        } else if (modeString == "rb") {
+            return result->Failure(new RuntimeError(
+                "Binary IO not implemented yet",
+                arg2->startPos, arg2->endPos, ctx
+            ));
+        } else if (modeString == "wba") {
+            return result->Failure(new RuntimeError(
+                "Binary IO not implemented yet",
+                arg2->startPos, arg2->endPos, ctx
+            ));
         } else {
             return result->Failure(new ValueError(
                 std::format("Invilid file open mode: '{}'", modeString),
