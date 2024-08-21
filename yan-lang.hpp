@@ -418,6 +418,19 @@ static inline std::vector<std::string> Split(const std::string &str, const std::
     }
 }
 
+std::string Join(const std::vector<std::string> &tokens, const std::string &splitter) {
+    std::stringstream ss;
+    int index = 1;
+    for (const auto &token : tokens) {
+        ss << token;
+        if (index != tokens.size()) {
+            ss << splitter;
+        }
+        index++;
+    }
+    return ss.str();
+}
+
 
 
 class Error {
@@ -1099,6 +1112,8 @@ struct VariableAccessNode : public NodeBase {
 };
 
 struct ListNode : public NodeBase {
+    bool isStatements;
+    
     std::vector<NodeBase *> elements;
     NodeBase *subscripting;
     NodeBase *newVal;
@@ -1613,7 +1628,9 @@ public:
             statements.push_back(statementNode);        
         }
 
-        return result->Success(new ListNode(statements, posStart, this->currentToken.et->Copy()));
+        auto n = new ListNode(statements, posStart, this->currentToken.et->Copy());
+        n->isStatements = true;
+        return result->Success(n);
     }
 
     ParseResult *Factor() {
@@ -1792,9 +1809,13 @@ public:
             if (subsciptionExprWrapper->err != nullptr) {
                 return result->Failure(subsciptionExprWrapper->err);
             }
-            return result->Success(new ListNode(elementNodes, posStart, this->currentToken.et->Copy(), subsciptionExprWrapper->ast, newValue));
+            auto n = new ListNode(elementNodes, posStart, this->currentToken.et->Copy(), subsciptionExprWrapper->ast, newValue);
+            n->isStatements = false;
+            return result->Success(n);
         } else {
-            return result->Success(new ListNode(elementNodes, posStart, this->currentToken.et->Copy()));
+            auto n = new ListNode(elementNodes, posStart, this->currentToken.et->Copy());
+            n->isStatements = false;
+            return result->Success(n);
         }
     }
 

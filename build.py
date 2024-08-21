@@ -4,7 +4,7 @@ import os
 
 INTERPRETER_SRC = 'yan-main.cpp'
 INTERPRETER_BIN = 'yan'
-MODULES = ['rand', 'fs', 'string', 'inspect']
+MODULES = ['rand', 'fs', 'string', 'inspect', 'os']
 CC_LINUX = 'g++'
 CC_WIN32 = 'x86_64-w64-mingw32-g++'
 CXX_STANDARD = 'c++20'
