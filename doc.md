@@ -763,6 +763,11 @@ ____
         - 属性 **name: String**
         - 方法 1: **read(this: FileObject) -> String**
         - 方法 2: **write(this: FileObject, content: String) -> null**
+        - 方法 3: **eof(this: FileObject) -> Bool (aka Number[Integer])** 注: 返回文件指针是否达到文件末尾
+        - 方法 4: **readLines(this: FileObject) -> List[String]**
+        - 方法 5: **readBuf(this: FileObject, size: Number[Integer]) -> String**
+        - 方法 6: **reverse(this: FileObject, size: Number[Integer]) -> null**
+        - 方法 7: **length(this: FileObject) -> Number[Integer] | String** 注: 返回文件长度
 
     ```javascript   
         // file_io_fs.yan
@@ -780,6 +785,7 @@ ____
     - **'w': 写入文件**
     - **'rw': 可读可写**
     - **'wa': 追加写入**
+    (二进制读写模式暂未实现)
     - **'rb': 二进制读取**
     - **'wb': 二进制写入**
     - **'wba': 二进制追加写入**
@@ -793,6 +799,189 @@ ____
         var content = file.read()
         // 别忘了手动关闭文件流
         // 用 fs.close() 函数传入打开的文件对象即可
-         fs.close(file)
-
+        fs.close(file)
     ```
+
+    > 方法 FileObject.readBuf() 与 FileObject.reverse() 用于随机读取，移动文件指针，其中 readBuf(n) 读取并前进 n 个字节，reverse(n) 反向移动 n 个字节
+
+
+    fs 库其余的一些函数均为文件系统相关的 API
+    ```javascript
+        filesystem.yan
+
+        // 导入 `fs` 模块
+        import('fs')
+
+        // 获取文件类型
+        var type = fs.getFileType('test.txt')
+        // 0: 普通文件
+        // 1: 目录
+        // 2: 符号链接
+        // 3: 块设备文件
+        // 4: 字符设备文件
+        // 5: 套接字文件
+        // 6: 管道文件
+
+
+        // 获取文件权限
+        var perm = fs.getFilePermissions('test.txt')
+        // 若无权限则返回空字符串
+        // 否则返回类似 'rw-r--r--' 的字符串
+
+        // 获取磁盘剩余空间
+        var space = fs.getFreeSpace('/')
+        // 第一个元素为总空间，第二个元素为剩余空间
+        // 单位为字节
+        // 参数理论上任意路径均可，最好是根目录 (Windows 下一次只能统计一个磁盘 (分卷)，所以为盘符, 若统计全部需要遍历所有盘符)
+
+        // 获取文件大小
+        var size = fs.getFileSize('test.txt')
+        // 单位为字节
+
+        // 格式化文件大小并输出
+        var sizeStr = fs.formatSize(size)
+        println(sizeStr)
+        // 输出类似 '1.23 MB' 的字符串
+
+        // 列出目录下的文件
+        var files = fs.listDirectory('.')
+        // 返回一个包含文件名的列表
+
+        // 获取文件最后修改时间
+        var time = fs.getLastWriteTime('test.txt')
+        // 格式为 'YYYY-MM-DD HH:MM:SS'
+
+        // 获取文件硬链接数
+        var links = fs.getHardLinksCount('test.txt')
+        // 若无硬链接则返回 1
+        // 以上函数均可在任意路径下调用，但若路径不存在或无权限则会引发 `OSError` 异常
+    ```
+
+    9.2 Yan 模块
+    
+    模块可以分为 Yan 语言实现的模块和 C++ 实现的库
+    - 由 Yan 语言编写的模块，一般以 `.yan` 结尾
+    - 由 C++ 编写的库，一般以 `.so` (windows 为 `.dll`) 结尾
+    - 内置模块位于 `builtins` 目录下 (Yan 环境变量中 `builtins-import-path` 所指定的值)
+    - 内置库位于 `libs` 目录下 (Yan 环境变量中 `libs-import-path` 所指定的值)
+
+
+    模块导入使用两个内置的**函数** `import()` 和 `require()`, 均接受单个字符串为参数，
+    有如下形式:
+    - `import(模块名)` 将模块名所指定的模块包装成对象导入当前作用域，无返回值
+    - `import(模块名.成员)` 将模块名所指定的模块的成员导入当前作用域，返回其值
+    - `require(模块名)` 将模块内所有符号导入当前作用域，不包装对象，无返回值
+    - `require('@' + 库名.成员名)` 从 C++ 库中加载一个符号，返回其值
+    
+    > 其中，模块名可为以 '/' 分割的相对路径
+
+    ```javascript
+        // modules.yan
+        import('math')
+        // 导入 math 模块，并将其包装成对象导入当前作用域
+        // 其成员可以直接使用，如 `math.pi`
+
+        var cbrt = import('math.cbrt')
+        // 导入 math 模块的 cbrt 函数，并将其导入当前作用域
+        // 其值可以直接使用，如 `cbrt(27)`
+
+        require('math')
+        // 导入 math 模块的所有符号，但不包装成对象
+        // 其成员可以直接使用，如 `pi`
+
+        var exists = require('@fs.Exists')
+        // 导入 C++ 库 fs 中的 Exists() 函数
+        // 其值可以直接使用，如 `exists('test.txt')`
+    ```
+
+    内置的模块基本都是 C++ 实现的，但也有一些由 Yan 语言实现的模块，如 `math` 模块，
+
+    使用 C++ 实现的模块一般需要一个存根文件，用 Yan 语言的 `require + @` 语法编写，用于一次性导入所有符号
+    
+    例如内置库 fs 的存根文件为 `fs.yan`
+
+    ```javascript
+        // fs.yan (位于 builtins/ 下)
+        var open = require('@fs.Open')
+        var close = require('@fs.Close')
+        var exists = require('@fs.Exists')
+        var getFreeSpace = require('@fs.GetFreeSpace')
+        var getFilePermissions = require('@fs.GetFilePermissions')
+        var getFileType = require('@fs.GetFileType')
+        var getFileSize = require('@fs.GetFileSize')
+        var formatSize = require('@fs.FormatSize')
+        var listDirectory = require('@fs.ListDirectory')
+        var getHardLinksCount = require('@fs.GetHardLinksCount')
+        var getLastWriteTime = require('@fs.GetLastWriteTime')
+    
+        // fs 库文件本身存在于 libs/fs.so
+    ```
+
+    只有这样做，才可以对 C++ 模块使用导入语法的前三种形式
+
+    导入的路径解析优先级：
+    - 无论何种导入：当前路径下最先
+    - 使用相对路径的导入
+    - 环境变量中指定的内置模块 (内置库) 路径
+    
+
+    导入失败时会引发 `OSError` 异常，有以下可能
+    - 模块路径解析失败
+    - 模块导入过程中出现错误 (解释器会捕获并打印模块内的错误信息)
+    - 库导入过程中出现错误
+    - 导入的成员不存在
+
+    ** 若是库导入失败，解释器会视为致命错误，直接退出，其余导入错误视为普通异常 **
+
+
+    9.3 Yan 异常与 defer 语句
+    
+    Yan 没有异常处理子句，用户自定义的异常可以由 `panic()` 引发崩溃，解释器的运行时异常和 panic 无法恢复 (机制待完善)
+
+    解释器异常分为如下类别:
+
+    - 词法/语法错误 (parse error)
+    - 运行时错误 (runtime error)
+    - 致命错误 (fatal error)
+    - panic
+
+    ```javascript
+        // 词法/语法错误语法错误通常仅包含行号，文件名，错误描述等信息
+        // 运行时错误通常包含行号，列号，文件名，错误描述，关联源代码，调用堆栈等信息
+        // 致命错误会导致解释器崩溃，包含 C++ 异常信息
+        // panic 通常由用户自定义的 panic() 函数引发，包含用户自定义的信息
+
+        @abc // 出现非法符号 @，引发词法错误 IllgalCharacterError
+        
+        >>> File "<stdin>", line 1
+            IllegalCharacterError: Found unexpected '@'
+
+        println(0 // 括号未匹配，引发一种语法错误 SyntaxError
+        >>> File "<stdin>", line 1
+            SyntaxError: Mismatched '(' while calling function (unfinished)
+
+        var a = 1 / 0  /* 除数为 0，引发运行时错误 RuntimeError */
+        >>> RuntimeError: Division by zero
+              (Possibly related source: `var a = 1/0`)
+            Stack Traceback:
+              at <module> [<stdin>:1:11]
+        
+        panic('error') /* 引发用户自定义的运行时 panic 异常，描述信息为 'error' */
+        >>> Panic: error
+              (Possibly related source: `panic('error')`) 
+            Stack Traceback:
+              at panic [<stdin>:1:7]
+              at <module> [<stdin>:1:1]
+
+        require('@not-exist-lib.foo') /* 导入不存在库，引发致命错误 */
+
+        >>>
+        Fatal: Dynamic lib 'not-exists-lib' opened failed: lib/yan-not-exists-lib.so: cannot open shared object file: No such file or directory
+        yan: yan-lang.hpp:5874: RuntimeResult* (* LoadNativeFunctionImplementation(const std::string&, const std::string&))(Context*): 
+          Assertion `dylib != nullptr' failed.
+        Aborted (core dumped)
+    ```
+
+    `defer` 语句用于在函数调用链中引发异常后自动执行一段代码，常用于资源释放，如文件关闭等
+    
+    在 `defer` 语句中执行的代码可以选择将程序从异常中恢复，并继续执行后续代码，或是直接退出程序

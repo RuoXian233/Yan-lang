@@ -47,7 +47,7 @@ int main(int argc, char *argv[]) {
     }
 
     auto codeGenreator = Translator(ast->ast);
-    std::cout << "import builtins_py.common\n\n" << std::endl;
+    std::cout << "from builtins_py.common import *\n\n" << std::endl;
     std::cout << codeGenreator.ToPython() << std::endl;
 
     ifs.close();

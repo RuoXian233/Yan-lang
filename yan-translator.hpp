@@ -215,7 +215,7 @@ public:
         auto t = Visit(funcCallNode->target);
 
         if (Lexer::Contains(builtinNames, t)) {
-            result += "__yan_builtin_impl_";
+            result += "yan_builtin_impl_";
         }
 
         result += t;

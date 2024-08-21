@@ -507,7 +507,7 @@ public:
         std::string result = "Stack Traceback:\n";
         auto pos = this->st;
         auto rt = this->ctx;
-        if (rt == nullptr) {
+        if (rt == nullptr || pos == nullptr) {
             return "Stack Traceback:\n  [U] ?? (not avalible)";
         }
         while (rt != nullptr) {
@@ -526,6 +526,9 @@ public:
         // Fix me: Error content display
         auto basicErrorInfo = std::format("{}: {}", this->name, this->details);
         auto traceback = this->GenerateTraceBack();
+        if (!this->st || !this->et) {
+            return std::format("{}{}{}\n {}", RED, basicErrorInfo, RESET, traceback);
+        }
         try {
             auto possibleSource = ToWideString(Split(this->st->fileContent, "\n")[this->st->line]);
             std::wstringstream wss;
@@ -4335,10 +4338,19 @@ struct Function : public FunctionBase {
                 for (auto node : frameContext->deferNodes) {
                     auto expr = dynamic_cast<DeferNode *>(node)->deferExpr;
                     if (currentCallStackDepth <= MAX_CALLSTACK_DEPTH) {
+
+                        std::map<Object *, Object *> excInfo {
+                            { new String("category"), new String(lastError->name) },
+                            { new String("details"), new String(lastError->details) },
+                            { new String("line"), new Number(lastError->st->line + 1) },
+                            { new String("column"), new Number(lastError->st->column + 1) },
+                            { new String("filename"), new String(lastError->st->filename) }
+                        };
+                        frameContext->symbols->Set("__lastexc__", new Dictionary(excInfo));
                         result->Register(interpreter->Visit(expr, frameContext));        
                         if (result->ShouldReturn()) {
                             return result->Failure(
-                                lastError, result->error, "During handling the above exception, another exception occurred:"
+                                result->error, lastError, "During handling the above exception, another exception occurred:"
                             );                        
                         }
                     } else {
@@ -4348,7 +4360,13 @@ struct Function : public FunctionBase {
                         ));
                     }
                 }
-                return result->Failure(lastError);
+
+                auto frameState = frameContext->symbols->Get("__recovered__");
+                if (!frameState) {
+                    return result->Failure(lastError);
+                } else {
+                    return result->Success(frameState);
+                }
             } else {
                 return result;
             }
@@ -4564,7 +4582,7 @@ const std::vector<std::string> builtinNames {
     "sin", "cos", "tan", "abs", "log", "ln", "sqrt", "isFloating", "isInteger",
     "input", "import", "set", "require",
     "readFile", "writeFile", "append", "concat", "remove", "builtins", "panic", "del",
-    "range", "addressOf", "keys", "values", "global"
+    "range", "addressOf", "keys", "values", "global", "recover"
 };
 
 std::map<std::string, std::string> *envVars = nullptr;
@@ -5237,7 +5255,7 @@ namespace builtins {
         std::ifstream ifs;
         ifs.open(moduleFile + ".yan", std::ios::in);
         if (!ifs.is_open()) {
-             ifs.clear();
+            ifs.clear();
             ifs.open(std::format("{}/{}", GetEnvVar("builtins-import-path"), moduleFile + ".yan"), std::ios::in);
             if (!ifs.is_open()) {
                 return result->Failure(new OSError(
@@ -5284,7 +5302,14 @@ namespace builtins {
             }
         }
 
-        dest->symbols->Set(moduleFile, new Dictionary(moduleSymbols));
+        auto p = Split(moduleFile, "/");
+        std::string importName {};
+        if (p.size() != 1) {
+            importName = p[p.size() - 1];
+        } else {
+            importName = moduleFile;
+        }
+        dest->symbols->Set(importName, new Dictionary(moduleSymbols));
         return result->Success(Number::null);
     }
 
@@ -5499,6 +5524,29 @@ namespace builtins {
         ctx->global->Set(varName, value);
         return result->Success(Number::null);
     }
+
+    YanObject Recover(YanContext ctx) {
+        auto result = new RuntimeResult;
+        auto arg = ctx->parent->symbols->Get("__lastexc__");
+
+        if (!ctx->parent || !ctx->parent->parent) {
+            return result->Failure(new ValueError(
+                "Cannot recover from top-level scope or a normal function",
+                nullptr, nullptr, ctx
+            ));
+        }
+        auto ret = ctx->symbols->Get("__ret__");
+
+        if (arg != nullptr) {
+            ctx->parent->symbols->Remove("__lastexc__");
+            if (!ret) {
+                ctx->parent->parent->symbols->Set("__recovered__", Number::null);            
+            } else {
+                ctx->parent->parent->symbols->Set("__recovered__", ret);            
+            }
+        }
+        return result->Success(Number::null);
+    }
 }
 
 const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFuncIndexes {
@@ -5536,7 +5584,8 @@ const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFunc
     { "addressOf", builtins::AddressOf },
     { "keys", builtins::List_::Keys },
     { "values", builtins::List_::Values },
-    { "global", builtins::Global }
+    { "global", builtins::Global },
+    { "recover", builtins::Recover }
 };
 
 const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry {
@@ -5572,7 +5621,8 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
     { "addressOf", { "_object" } },
     { "keys", { "_dict" } },
     { "values", { "_dict" } },
-    { "global", { "_varName", "_value" } }
+    { "global", { "_varName", "_value" } },
+    { "recover", { "__ret__" } }
 };
 
 #ifdef __linux__
@@ -5811,7 +5861,8 @@ static std::map<std::string, BuiltinFunction *> allBuiltins {
     { "addressOf", nullptr },
     { "keys", nullptr }, 
     { "values", nullptr },
-    { "global", nullptr }
+    { "global", nullptr },
+    { "recover", nullptr }
 };
 
 DylibType OpenDynamicLibrary(const std::string &dylib) {
