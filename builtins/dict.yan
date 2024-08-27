@@ -1,5 +1,7 @@
 var mod = import('math.imod')
 
+panic('Module "dict" is deprecated now')
+
 
 function _isOdd(n) -> mod(n, 2) == 1
 

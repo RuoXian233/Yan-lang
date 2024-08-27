@@ -118,7 +118,9 @@ public:
         case TokenType::OP_Plus:
             opValue = "+";
             break;
-
+        case TokenType::OP_Minus:
+            opValue = "-";
+            break;
         case TokenType::Keyword:
             opValue = "not ";
             break;
@@ -182,20 +184,53 @@ public:
     std::string VisitForExpression(NodeBase *node) {
         auto forExpressionNode = dynamic_cast<ForExpressionNode *>(node);
         std::string result {};
-        indent++;
 
-        if (forExpressionNode->rangeBasedLoop) {
-            result += "for " + *((std::string *) forExpressionNode->var.value) + " in " + Visit(forExpressionNode->range) + ":\n";
-        } else {
-            if (forExpressionNode->stepvNode) {
-                result += "for " + *((std::string *) forExpressionNode->var.value) + " in range(" + Visit(forExpressionNode->stvNode) + ", " + Visit(forExpressionNode->etvNode) + ", " + Visit(forExpressionNode->stepvNode) + "):\n";
+        if (forExpressionNode->body->nodeType == NodeType::List && dynamic_cast<ListNode *>(forExpressionNode->body)->isStatements) {
+            indent++;
+            if (forExpressionNode->rangeBasedLoop) {
+                result += "for " + *((std::string *) forExpressionNode->var.value) + " in " + Visit(forExpressionNode->range) + ":\n";
             } else {
-                result += "for " + *((std::string *) forExpressionNode->var.value) + " in range(" + Visit(forExpressionNode->stvNode) + ", " + Visit(forExpressionNode->etvNode) + "):\n";
+                if (forExpressionNode->stepvNode) {
+                    result += "for " + *((std::string *) forExpressionNode->var.value) + " in range(" + Visit(forExpressionNode->stvNode) + ", " + Visit(forExpressionNode->etvNode) + ", " + Visit(forExpressionNode->stepvNode) + "):\n";
+                } else {
+                    result += "for " + *((std::string *) forExpressionNode->var.value) + " in range(" + Visit(forExpressionNode->stvNode) + ", " + Visit(forExpressionNode->etvNode) + "):\n";
+                }
             }
+            result += Visit(forExpressionNode->body);
+            indent--;
+            return result;
+        } else {
+            if (forExpressionNode->body->nodeType == NodeType::VarAssign) {
+                auto varName = *(std::string *) dynamic_cast<VariableAssignNode *>(forExpressionNode->body)->variableNameToken.value;
+                auto val = Visit(dynamic_cast<VariableAssignNode *>(forExpressionNode->body)->valueNode);
+                result += "[yan_impl_inline_assign('" +  varName + "\', " + val + ")";
+            } else if (forExpressionNode->body->nodeType == NodeType::AdvancedVarAccess) {
+                bool useInline = false;
+                for (auto node: dynamic_cast<AdvancedVarAccessNode *>(forExpressionNode->body)->advancedAccess) {
+                    if (node->nodeType == NodeType::Attribution && dynamic_cast<AttributionNode *>(node)->assignment) {
+                        useInline = true;
+                    }
+                }
+                if (useInline) {
+                    result += "[yan_pyeval(\"" + Visit(forExpressionNode->body) + "\")";
+                } else {
+                    goto normal_parse; 
+                }
+            } else {
+normal_parse:
+                result += "[" + Visit(forExpressionNode->body);
+            }
+            if (forExpressionNode->rangeBasedLoop) {
+                result += " for " + *((std::string *) forExpressionNode->var.value) + " in " + Visit(forExpressionNode->range) + "]";
+            } else {
+                if (forExpressionNode->stepvNode) {
+                    result += " for " + *((std::string *) forExpressionNode->var.value) + " in range(" + Visit(forExpressionNode->stvNode) + ", " + Visit(forExpressionNode->etvNode) + ", " + Visit(forExpressionNode->stepvNode) + ")]";
+                } else {
+                    result += " for " + *((std::string *) forExpressionNode->var.value) + " in range(" + Visit(forExpressionNode->stvNode) + ", " + Visit(forExpressionNode->etvNode) + ")]";
+                }
+            }
+            return result;
         }
-        result += Visit(forExpressionNode->body);
-        indent--;
-        return result;
     }
     
     std::string VisitWhileExpression(NodeBase *node) {
@@ -236,32 +271,91 @@ public:
     std::string VisitFunctionDefinition(NodeBase *node) {
         auto funcDefNode = dynamic_cast<FunctionDefinitionNode *>(node);
         std::string result {};
-        indent++;
         std::string funcName {};
         if (!funcDefNode->fun.value) {
             funcName = "__yan_anonymous_func__";
         } else {
             funcName = *(std::string *) funcDefNode->fun.value;
         }
-        result += "def " + funcName + "(";
 
-        int index = 0;
-        for (auto arg : funcDefNode->parameters) {
-            auto argName = *(std::string *) arg.value;
-            if (argName.starts_with("_") && argName.ends_with("_")) {
-                result += '*' + argName.substr(1, argName.size() - 2);
+        if (funcDefNode->body->nodeType == NodeType::List && dynamic_cast<ListNode *>(funcDefNode->body)->isStatements) {
+            result += "def " + funcName + "(";
+
+            indent++;
+            int index = 0;
+            for (auto arg : funcDefNode->parameters) {
+                auto argName = *(std::string *) arg.value;
+                if (argName.starts_with("_") && argName.ends_with("_")) {
+                    result += '*' + argName.substr(1, argName.size() - 2);
+                } else {
+                    result += argName;
+                }
+                if (index != funcDefNode->parameters.size() - 1) {
+                    result += ", ";
+                }
+                index++;
+            }
+            result += "):\n";
+            result += Visit(funcDefNode->body);
+            indent--;
+            return result;
+        } else {
+            if (!funcDefNode->fun.value) {
+                result += "lambda ";
+                int index = 0;
+                for (auto arg : funcDefNode->parameters) {
+                    auto argName = *(std::string *) arg.value;
+                    if (argName.starts_with("_") && argName.ends_with("_")) {
+                        result += '*' + argName.substr(1, argName.size() - 2);
+                    } else {
+                        result += argName;
+                    }
+                    if (index != funcDefNode->parameters.size() - 1) {
+                        result += ", ";
+                    }
+                    index++;
+                }
+                if (funcDefNode->body->nodeType == NodeType::AdvancedVarAccess) {
+                    bool useInline = false;
+                    
+                    for (auto node : dynamic_cast<AdvancedVarAccessNode *>(funcDefNode->body)->advancedAccess) {
+                        if (node->nodeType == NodeType::Attribution && dynamic_cast<AttributionNode *>(node)->assignment) {
+                            useInline = true;
+                        }
+                    }
+
+                    if (useInline) {
+                        result += ": yan_pyeval(\"" + Visit(funcDefNode->body) + "\")";
+                        return result;
+                    }
+                } else if (funcDefNode->body->nodeType == NodeType::VarAssign) {
+                    auto value = dynamic_cast<VariableAssignNode *>(funcDefNode->body)->valueNode;
+                    auto varName = *(std::string *) dynamic_cast<VariableAssignNode *>(funcDefNode->body)->variableNameToken.value;
+                    result += ": " + std::format("yan_impl_inline_assign('{}', {})", varName, Visit(value));
+                    return result;
+                }
+                result += ": " + Visit(funcDefNode->body);
+                return result;
             } else {
-                result += argName;
+                result += "def " + funcName + "(";
+                int index = 0;
+                for (auto arg : funcDefNode->parameters) {
+                    auto argName = *(std::string *) arg.value;
+                    if (argName.starts_with("_") && argName.ends_with("_")) {
+                        result += '*' + argName.substr(1, argName.size() - 2);
+                    } else {
+                        result += argName;
+                    }
+                    if (index != funcDefNode->parameters.size() - 1) {
+                        result += ", ";
+                    }
+                    index++;
+                }
+                result += "): ";
+                result += Visit(funcDefNode->body);
+                return result;
             }
-            if (index != funcDefNode->parameters.size() - 1) {
-                result += ", ";
-            }
-            index++;
         }
-        result += "):\n";
-        result += Visit(funcDefNode->body);
-        indent--;
-        return result;
     }
     
     std::string VisitString(NodeBase *node) {
@@ -318,8 +412,35 @@ public:
         auto subscriptionNode = dynamic_cast<SubscriptionNode *>(node);
         std::string result {};
         result += Visit(subscriptionNode->target) + "[" + Visit(subscriptionNode->index) + "]";
+        if (subscriptionNode->calls.find(0) != subscriptionNode->calls.end()) {
+            result += "(";
+            int index = 0;
+            for (auto item : subscriptionNode->calls[0]) {
+                result += Visit(item);
+                if (index != subscriptionNode->calls[0].size() - 1) {
+                    result += ", ";
+                }
+                index++;
+            }
+            result += ")";
+        }
+
+        int index = 1;
         for (auto item : subscriptionNode->subIndexes) {
             result += "[" + Visit(item) + "]";
+            if (subscriptionNode->calls.find(index) != subscriptionNode->calls.end()) {
+                result += "(";
+                int _index = 0;
+                for (auto item : subscriptionNode->calls[index]) {
+                    result += Visit(item);
+                    if (_index != subscriptionNode->calls[index].size() - 1) {
+                        result += ", ";
+                    }
+                    _index++;
+                }
+                result += ")";
+            }
+            index++;
         }
         if (subscriptionNode->assignment) {
             result += " = " + Visit(subscriptionNode->assignment);
@@ -329,7 +450,7 @@ public:
 
     std::string VisitDictionary(NodeBase *node) {
         auto dictNode = dynamic_cast<DictionaryNode *>(node);
-        std::string result = "__yan_dict_impl({ ";
+        std::string result = "yan_dict_impl({ ";
 
         int count = 1;
         for (const auto &[k, v] : dictNode->elements) {

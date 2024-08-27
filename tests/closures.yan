@@ -1,0 +1,13 @@
+function generateFunctionFactory(max)
+    return \
+        for i in range(max) then \
+            function(); \
+                nonlocal i; \
+                return i; \
+            end
+end
+
+var functions = generateFunctionFactory(10)
+for i = 0 to len(functions) then
+    println(functions[i]())
+end

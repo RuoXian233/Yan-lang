@@ -1,0 +1,2 @@
+var fetch = require('@time.Fetch')
+var now = require('@time.Now')

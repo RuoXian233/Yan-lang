@@ -20,15 +20,17 @@ int main(int argc, char *argv[]) {
         auto lineContent = line;
         // preprocessor -> python code embedding
         std::string strippedLine {};
+        bool stripped = false;
         for (auto &&c : lineContent) {
-            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-                 continue;
+            if ((c == ' ' || c == '\t' || c == '\n' || c == '\r') && !stripped) {
+                continue;
             } else {
+                stripped = true;
                 strippedLine += c;
             }
         }
         if (strippedLine.starts_with("[[") && line.ends_with("]]")) {
-            lineContent = "__yan_pyeval('" + strippedLine.substr(2, strippedLine.size() - 4) + "')";
+            lineContent = "yan_pyeval('" + strippedLine.substr(2, strippedLine.size() - 4) + "')";
         }
         lines.push_back(lineContent);
     }
@@ -47,8 +49,13 @@ int main(int argc, char *argv[]) {
     }
 
     auto codeGenreator = Translator(ast->ast);
-    std::cout << "from builtins_py.common import *\n\n" << std::endl;
-    std::cout << codeGenreator.ToPython() << std::endl;
+    std::stringstream ss;
+    ss << "from builtins_py.common import *\n\n\n";
+    ss << codeGenreator.ToPython();
 
     ifs.close();
+
+    std::ofstream ofs(file.substr(0, file.find(".")) + ".py");
+    ofs << ss.str();
+    ofs.close();
 }

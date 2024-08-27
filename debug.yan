@@ -1,10 +1,1 @@
-function produceAdder(x)
-    function add(y)
-        nonlocal x
-        return x + y
-    end
-    return add
-end
-
-var adder = produceAdder(3)
-println(adder(4))
+f().a

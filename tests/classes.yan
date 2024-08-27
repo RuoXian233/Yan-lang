@@ -1,0 +1,21 @@
+var a = { 'b': 1, 'c': 2 }
+
+var c = { \
+    'a': { 'b': { 'c': 1 } }, \
+    'f': { 'g': { 'h': [1, 2, function() -> { 'i': function(this) -> { 'v': a, 'l': this } } ] } } \
+}
+
+
+
+println(c.a)
+println(c.a.b)
+println(c.a.b.c)
+
+println(c.f.g.h)
+println(c.f.g.h[2])
+println(c.f.g.h[2]())
+println(c.f.g.h[2]().i)
+println(c.f.g.h[2]().i().v)
+c.f.g.h[2]().i().v.c = 3
+println(c.f.g.h[2]().i().l)
+println(a)

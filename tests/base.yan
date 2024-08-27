@@ -1,0 +1,7 @@
+println(1 + 2)
+
+for i = 0 to 100 then println(i)
+
+for i in range(10) then println(i)
+
+var a = var b = var c = {}

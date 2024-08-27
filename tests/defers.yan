@@ -1,0 +1,22 @@
+import('inspect')
+
+
+function handler(a, b)
+    if typeof(__lastexc__) != typeof(null) then
+        println('Error: ' + __lastexc__.details)
+        println(inspect.getCallStackInfo())
+        recover()
+    end
+end
+
+
+function f(a, b)
+    defer handler(a, b)
+    return a / b
+end
+
+f(4, 2)
+
+f(1, 0)
+
+println('Done. After recover')

@@ -1,7 +1,5 @@
 #include "yan-lang.hpp"
 
-YAN_INITIALIZE_CALL_STACK_INFO();
-
 
 int main(int argc, char **argv) {
     globalSymbolTable = new SymbolTable;

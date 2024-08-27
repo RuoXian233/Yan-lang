@@ -1,1 +1,1 @@
-1. Weak support for tracebacks of builtin/native function calls (inaccurate position)
+#1 : cannot use indexes or function calls in `new` expression (which will trigger a runtime error)

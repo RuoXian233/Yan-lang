@@ -47,6 +47,8 @@
 #include <cstdio>
 #include <locale>
 #include <codecvt>
+#include <iomanip>
+#include <cstring>
 
 
 const char *YAN_LANG_VERSION = "2.0";
@@ -131,6 +133,420 @@ const unsigned MAX_CALLSTACK_DEPTH = 50;
 long currentCallStackDepth = 0;
 unsigned overflowCount = 0;
 const unsigned INVILID_OVERFLOW_TOLERANCE = 10;
+
+
+class BigInteger {
+private:
+    static const int BASE = 100000000;
+    static const int WIDTH = 8;
+    bool sign;
+    size_t length;
+    std::vector<int> num;
+
+    void CutLeadingZero() {
+        while (num.back() == 0 && num.size() != 1) {
+            num.pop_back();
+        }
+    }
+
+    void SetLength() {
+        this->CutLeadingZero();
+        int tmp = num.back();
+        if (tmp == 0) {
+            length = 1;
+        } else {
+            length = (num.size() - 1) * 8;
+            while (tmp > 0) {
+                ++length;
+                tmp /= 10;
+            }
+        }
+    }
+
+public:
+    BigInteger(int n = 0) { *this = n; }
+    BigInteger(long long n) { *this = n; }
+    BigInteger(const char *n) { *this = n; }
+    BigInteger(const BigInteger &n) { *this = n; }
+    BigInteger(const std::string &n) { *this = n; }
+
+    const BigInteger& operator=(int n) {
+         *this = (long long)n;
+        return *this;
+    }
+
+    const BigInteger& operator=(long long n) {
+        num.clear();
+        if (n == 0) {
+            num.push_back(0);
+        }
+        if (n >= 0) {
+            sign = true;
+        } else if (n == LONG_LONG_MIN) {
+            *this = "-9223372036854775808";
+            return *this;
+        } else if (n < 0) {
+            sign = false;
+            n = -n;
+        }
+
+        while (n != 0) {
+            num.push_back(n % BASE);
+            n /= BASE;
+        }
+        this->SetLength();
+        return *this;
+    }
+
+    const BigInteger& operator=(const char *n) {
+        int len = strlen(n);
+        int tmp = 0;
+        int ten = 1;
+        int stop = 0;
+        num.clear();
+        sign = (n[0] != '-');
+        if (!sign) {
+            stop = 1;
+        }
+        for (int i = len; i > stop; --i) {
+            tmp += (n[i - 1] - '0') * ten;
+            ten *= 10;
+            if ((len - i) % 8 == 7) {
+                num.push_back(tmp);
+                tmp = 0;
+                ten = 1;
+            }
+        }
+        if ((len - stop) % WIDTH != 0) {
+            num.push_back(tmp);
+        }
+        SetLength();
+        return *this;
+    }
+
+    const BigInteger &operator=(const std::string &n) {
+        *this = n.c_str();
+        return *this;
+    }
+
+    const BigInteger& operator=(const BigInteger &n) {
+        num = n.num;
+        sign = n.sign;
+        length = n.length;
+        return *this;
+    }
+
+    size_t size() const { return this->length; }
+    BigInteger e(size_t n) const {
+        int tmp = n % 8;
+        BigInteger ans;
+        ans.length = n + 1;
+        n /= 8;
+
+        while (ans.num.size() <= n) {
+            ans.num.push_back(0);
+        }
+        ans.num[n] = 1;
+        while (tmp--) {
+            ans.num[n] *= 10;
+        }
+        return ans * (*this);
+    }
+
+    BigInteger abs() const {
+        BigInteger ans(*this);
+        ans.sign = true;
+        return ans;
+    }
+
+    const BigInteger& operator+() const {
+        return *this;
+    }
+
+    friend BigInteger operator+(const BigInteger &a, const BigInteger &b) {
+        if (!b.sign) {
+            return a - (-b);
+        }
+        if (!a.sign) {
+            return b - (-a);
+        }
+        BigInteger ans;
+        int carry = 0;
+        int aa, bb;
+        size_t lena = a.num.size();
+        size_t lenb = b.num.size();
+        size_t len = std::max(lena, lenb);
+        ans.num.clear();
+
+        for (size_t i = 0; i < len; ++i) {
+            if (lena <= i) {
+                aa = 0;
+            } else {
+                aa = a.num[i];
+            }
+            if (lenb <= i) {
+                bb = 0;
+            } else {
+                bb = b.num[i];
+            }
+            ans.num.push_back((aa + bb + carry) % BigInteger::BASE);
+            carry = (aa + bb + carry) / BigInteger::BASE;
+        }
+        if (carry > 0) {
+            ans.num.push_back(carry);
+        }
+        ans.SetLength();
+        return ans;
+    }
+
+    const BigInteger& operator+=(const BigInteger &n) {
+        *this = *this + n;
+        return *this;
+    }
+
+    const BigInteger& operator++() {
+        *this = *this + 1;
+        return *this;
+    }
+
+    BigInteger operator++(int) {
+        BigInteger ans(*this);
+        *this = *this + 1;
+        return ans;
+    }
+
+    BigInteger operator-() const {
+        BigInteger ans(*this);
+        if(ans != 0) {
+            ans.sign = !ans.sign;
+        }
+        return ans;
+    }
+
+    friend BigInteger operator-(const BigInteger &a, const BigInteger &b) {
+        if(!b.sign) {
+            return a + (-b);
+        }
+        if(!a.sign) {
+            return -((-a) + b);
+        }
+        if(a < b) {
+            return -(b - a);
+        }
+
+        BigInteger ans;
+        int carry = 0;
+        int aa, bb;
+        size_t lena = a.num.size();
+        size_t lenb = b.num.size();
+        size_t len = std::max(lena, lenb);
+        ans.num.clear();
+
+        for (size_t i = 0; i < len; ++i) {
+            aa = a.num[i];
+            if (i >= lenb) {
+                bb = 0;
+            } else {
+                bb = b.num[i];
+            }
+            ans.num.push_back((aa - bb - carry + BigInteger::BASE) % BigInteger::BASE);
+            if (aa < bb + carry) {
+                carry = 1;
+            } else {
+                carry = 0;
+            }
+        }
+     
+        ans.SetLength();
+        return ans;
+    }
+
+    const BigInteger& operator-=(const BigInteger &n) {
+        *this = *this - n;
+        return *this;
+    }
+
+    const BigInteger& operator--() {
+        *this = *this - 1;
+        return *this;
+    }
+
+    BigInteger operator--(int) {
+        BigInteger ans(*this);
+        *this = *this - 1;
+        return ans;
+    }
+
+    friend BigInteger operator*(const BigInteger &a, const BigInteger &b) {
+        size_t lena = a.num.size();
+        size_t lenb = b.num.size();
+        std::vector<long long> ansLL;
+        for (size_t i = 0; i < lena; ++i) {
+            for (size_t j = 0; j < lenb; ++j) {
+                if (i + j >= ansLL.size()) {
+                    ansLL.push_back((long long)a.num[i] * (long long)b.num[j]);
+                } else {
+                    ansLL[i + j] += (long long)a.num[i] * (long long)b.num[j];
+                }
+            }
+        }
+
+        while (ansLL.back() == 0 && ansLL.size() != 1) {
+            ansLL.pop_back();
+        }
+        size_t len = ansLL.size();
+        long long carry = 0;
+        long long tmp;
+        BigInteger ans;
+        ans.sign = (ansLL.size() == 1 && ansLL[0] == 0) || (a.sign == b.sign);
+        ans.num.clear();
+        for (size_t i = 0; i < len; ++i) {
+            tmp = ansLL[i];
+            ans.num.push_back((tmp + carry) % BigInteger::BASE);
+            carry = (tmp + carry) / BigInteger::BASE;
+        }
+        if (carry > 0) {
+            ans.num.push_back(carry);
+        }
+        ans.SetLength();
+        return ans;
+    }
+
+    const BigInteger& operator*=(const BigInteger &n) {
+        *this = *this * n;
+        return *this;
+    }
+
+    friend BigInteger operator/(const BigInteger &a, const BigInteger &b) {
+        BigInteger aa(a.abs());
+        BigInteger bb(b.abs());
+        if (aa < bb) {
+            return 0;
+        }
+        char *str = new char[aa.size() + 1];
+        memset(str, 0, sizeof(char) * (aa.size() + 1));
+        BigInteger tmp;
+        int lena = aa.length;
+        int lenb = bb.length;
+        for (int i = 0; i <= lena - lenb; ++i) {
+            tmp = bb.e(lena - lenb - i);
+            while(aa >= tmp) {
+                ++str[i];
+                aa = aa - tmp;
+            }
+            str[i] += '0';
+        }
+
+        BigInteger ans(str);
+        delete[] str;
+        ans.sign = (ans == 0 || a.sign == b.sign);
+        return ans;
+    }
+
+    const BigInteger& operator/=(const BigInteger &n) {
+        *this = *this / n;
+        return *this;
+    }
+
+    friend BigInteger operator%(const BigInteger &a, const BigInteger &b) {
+        return a - a / b * b;
+    }
+
+    const BigInteger& operator%=(const BigInteger &n) {
+        *this = *this - *this / n * n;
+        return *this;
+    }
+
+    friend bool operator<(const BigInteger &a, const BigInteger &b) {
+        if (a.sign && !b.sign) {
+            return false;
+        } else if (!a.sign && b.sign) {
+            return true;
+        } else if (a.sign && b.sign) {
+            if (a.length < b.length) {
+                return true;
+            } else if (a.length > b.length) {
+                return false;
+            } else {
+                size_t lena = a.num.size();
+                for (int i = lena - 1; i >= 0; --i) {
+                    if (a.num[i] < b.num[i]) {
+                        return true;
+                    } else if (a.num[i] > b.num[i]) {
+                        return false;
+                    }
+                }
+                return false;
+            }
+        } else {
+            return -b < -a;
+        }
+    }
+    
+    friend bool operator<=(const BigInteger &a, const BigInteger &b) {
+        return !(b < a);
+    }
+
+    friend bool operator>(const BigInteger &a, const BigInteger &b) {
+        return b < a;
+    }
+
+    friend bool operator>=(const BigInteger &a, const BigInteger &b) {
+        return !(a < b);
+    }
+
+    friend bool operator==(const BigInteger &a, const BigInteger &b) {
+        return !(a < b) && !(b < a);
+    }
+
+    friend bool operator!=(const BigInteger &a, const BigInteger &b) {
+        return (a < b) || (b < a);
+    }
+
+    friend bool operator||(const BigInteger &a, const BigInteger &b) {
+        return a != 0 || b != 0;
+    }
+
+    friend bool operator&&(const BigInteger &a, const BigInteger &b) {
+        return a != 0 && b != 0;
+    }
+
+    bool operator!() {
+        return *this == 0;
+    }
+
+    friend std::ostream& operator<<(std::ostream &out, const BigInteger &n) {
+         size_t len = n.num.size();
+        if(!n.sign) {
+            out << '-';
+        }
+        out << n.num.back();
+        for(int i = len - 2; i >= 0; --i) {
+            out << std::setw(BigInteger::WIDTH) << std::setfill('0') << n.num[i];
+        }
+        return out;
+    }
+
+    friend std::istream& operator>>(std::istream &in, BigInteger &n) {
+        std::string str;
+        in >> str;
+        size_t len = str.length();
+        size_t i, start = 0;
+        if(str[0] == '-') {
+            start = 1;
+        }
+        if(str[start] == '\0') {
+            return in;
+        }
+        for(i = start; i < len; ++i) {
+            if(str[i] < '0' || str[i] > '9') {
+                return in;
+            }
+        }
+        n = str.c_str();
+        return in;
+    }
+};
 
 
 enum class TokenType {
@@ -537,8 +953,12 @@ public:
             int col = 0;
 
             for (auto c : possibleSource) {
-                if (col == this->st->column) {
+                if (col == this->st->column - 1) {
                     wss << ToWideString(RED);
+                }
+
+                if (this->et->line == this->st->line && col == this->et->column) {
+                    wss << ToWideString(RESET);
                 }
                 wss << c;
                 col++;
@@ -867,7 +1287,7 @@ public:
     }
 
     const std::vector<std::string> OP = {
-        " ", "$", "%", "&", "|", "\\", "+", "-", "*", "/", "^", ":", "[", "]", "{", "}", "(", ")", "'", "=", ">", "<", "!", ",", ";", ".", "?", "#", "@"
+        " ", "%", "&", "|", "\\", "+", "-", "*", "/", "^", ":", "[", "]", "{", "}", "(", ")", "'", "=", ">", "<", "!", ",", ";", ".", "?", "#", "@", "\"", "~", "`"
     };
 
     std::pair<Tokens, Error*> MakeTokens() {
@@ -946,6 +1366,15 @@ public:
             } else if (this->currentChar == L"}") {
                 tokens.push_back(Token(TokenType::RStart, nullptr, this->pos));
                 this->Advance();
+            } else if (this->currentChar == L"\\") {
+                if (Lexer::CharAt(this->text, this->pos->index + 1) != L"\n") {
+                    return std::make_pair(Tokens(), new IllegalCharacterError(
+                        "Trailing characters after line continuation character",
+                        this->pos, this->pos
+                    ));
+                }
+                this->Advance();
+                this->Advance();
             } else {
                 auto errorChar = this->currentChar;
                 auto errorPos = this->pos->Copy();
@@ -997,7 +1426,7 @@ enum class NodeType {
     AdvancedVarAccess,
     NewExpression,
     AttributionCall,
-    SubsciptionCall,
+    SubscriptionCall,
     NonlocalStatement,
     Defer,
     Invilid
@@ -1337,8 +1766,8 @@ struct ContinueStatementNode final : public NodeBase {
 struct SubscriptionNode final : public NodeBase {
     NodeBase *index;
     std::vector<NodeBase *> subIndexes;
+    std::map<int, std::vector<NodeBase *>> calls;
     NodeBase *assignment;
-    // NodeBase *target;
     NodeBase *target;
     explicit SubscriptionNode(NodeBase *t, NodeBase *idxExpr, NodeBase *assignment = nullptr) :
         target(t), index(idxExpr), assignment(assignment), NodeBase(NodeType::Subscription)
@@ -1353,6 +1782,10 @@ struct SubscriptionNode final : public NodeBase {
 
     void AddSubIndex(NodeBase *nd) {
         this->subIndexes.push_back(nd);
+    }
+
+    void SetCalls(const std::map<int, std::vector<NodeBase *>> &calls) {
+        this->calls = calls;
     }
 };
 
@@ -1393,10 +1826,10 @@ struct AttributionCallNode final : public NodeBase {
 };
 
 struct SubscriptionCallNode final : public NodeBase {
-    FunctionCallNode *call;
-    explicit SubscriptionCallNode(FunctionCallNode *call) : call(call), NodeBase(NodeType::SubsciptionCall) {
-        this->st = this->call->st;
-        this->et = this->call->et;
+    std::vector<NodeBase *> arguments;
+    explicit SubscriptionCallNode(std::vector<NodeBase *> arguments, Position *st, Position *et) : arguments(arguments), NodeBase(NodeType::SubscriptionCall) {
+        this->st = st;
+        this->et = et;
     }
 };
 
@@ -1699,10 +2132,23 @@ public:
                 result->RegisterAdvance();
                 this->Advance();
             }
-            return result->Success(new FunctionCallNode(atomNode, args));
+
+            auto nd = new FunctionCallNode(atomNode, args);
+            NodeBase *_node;
+            if (this->currentToken.type == TokenType::Dot) {
+                _node = result->Register(this->Attribution(nd));
+                if (result->err != nullptr) {
+                    return result;
+                }
+            } else {
+                _node = nd;
+            }
+            return result->Success(_node);
         }
         return result->Success(atomNode);
     }
+
+    // TODO: Attribute access after function call is invaild? f().a -> error [Temp solved]
 
     ParseResult *Term() {
         return this->BinaryOperation(&Parser::Factor, SECOND_LEVEL_OPERANDS);
@@ -2090,8 +2536,47 @@ public:
         }
         result->RegisterAdvance();
         this->Advance();
+        std::map<int, std::vector<NodeBase *>> calls;
+        if (currentToken.type == TokenType::Lparen) {
+            result->RegisterAdvance();
+            this->Advance();
+            std::vector<NodeBase *> args;
+
+            if (this->currentToken.type == TokenType::Rparen) {
+                calls.insert(std::make_pair(0, args));
+                result->RegisterAdvance();
+                this->Advance();
+            } else {
+                auto arg = result->Register(this->Expr());
+                if (result->err != nullptr) {
+                    return result;
+                }
+                args.push_back(arg);
+
+                while (this->currentToken.type == TokenType::Comma) {
+                    result->RegisterAdvance();
+                    this->Advance();
+                    auto arg = result->Register(this->Expr());
+                    if (result->err != nullptr) {
+                        return result;
+                    }
+                    args.push_back(arg);
+                }
+
+                if (this->currentToken.type != TokenType::Rparen) {
+                    return result->Failure(new SyntaxError(
+                        "Mismatched ')' in function call",
+                        this->currentToken.st, this->currentToken.et
+                    ));
+                }
+                calls.insert(std::make_pair(0, args));
+                result->RegisterAdvance();
+                this->Advance();
+            }
+        }
 
         std::vector<NodeBase *> subNodes;
+        int index = 1;
         while (this->currentToken.type == TokenType::LSquare) {
             result->RegisterAdvance();
             this->Advance();
@@ -2108,6 +2593,43 @@ public:
             }
             result->RegisterAdvance();
             this->Advance();
+
+            if (currentToken.type == TokenType::Lparen) {
+                result->RegisterAdvance();
+                this->Advance();
+                std::vector<NodeBase *> args;
+
+                if (this->currentToken.type == TokenType::Rparen) {
+                    calls.insert(std::make_pair(index, args));
+                } else {
+                    auto arg = result->Register(this->Expr());
+                    if (result->err != nullptr) {
+                        return result;
+                    }
+                    args.push_back(arg);
+
+                    while (this->currentToken.type == TokenType::Comma) {
+                        result->RegisterAdvance();
+                        this->Advance();
+                        auto arg = result->Register(this->Expr());
+                        if (result->err != nullptr) {
+                            return result;
+                        }
+                        args.push_back(arg);
+                    }
+
+                    if (this->currentToken.type != TokenType::Rparen) {
+                        return result->Failure(new SyntaxError(
+                            "Mismatched ')' in function call",
+                            this->currentToken.st, this->currentToken.et
+                        ));
+                    }
+                    calls.insert(std::make_pair(index, args));
+                }
+                result->RegisterAdvance();
+                this->Advance();
+            }
+            index++;
         }
 
         // result->RegisterAdvance();
@@ -2124,12 +2646,14 @@ public:
             for (auto node : subNodes) {
                 sn->AddSubIndex(node);
             }
+            sn->SetCalls(calls);
             return result->Success(sn);
         }
         auto sn = new SubscriptionNode(target, indexExpr);
         for (auto node : subNodes) {
             sn->AddSubIndex(node);
         }
+        sn->SetCalls(calls);
         return result->Success(sn);
     }
 
@@ -2223,6 +2747,7 @@ public:
                 return result;
             } 
             auto an = new AttributionNode(varAccess, attr, assExpr);
+            an->SetCalls(calls);
             if (attrs.size() > 0) {
                 an->SetSubAttrs(attrs);
             }
@@ -2616,7 +3141,6 @@ public:
             }
 
             auto variableName = this->currentToken;
-            // TODO: Change this ?
             result->Register(this->Advance());
 
             if (this->currentToken.type != TokenType::OP_Eq) {
@@ -2781,6 +3305,7 @@ public:
                 return result;
             }
             auto fd = new FunctionDefinitionNode(funcNameToken, args, bodyNode, true);
+            this->functionLayers--;
             return result->Success(fd);
         }
 
@@ -3844,6 +4369,15 @@ inline std::string StringifySequence(const std::vector<Object *> &seq) {
 struct List : public Object {
     std::vector<Object *> elements;
     using ObjectWithError = std::pair<Object *, Error *>;
+    bool isParameterPack = false;
+    bool isMutable = true;
+
+    List *AsParameterPack() { 
+        auto c = As<List>(this->Copy());
+        c->isParameterPack = true;
+        return c;
+    }
+    List *SetUnmutable(bool v = false) { this->isMutable = v; return this; }
 
     explicit List(const std::vector<Object *> &elements) : elements(elements), Object("List") {}
 
@@ -3958,6 +4492,8 @@ struct List : public Object {
         auto copy = new List(this->elements);
         copy->SetPos(this->startPos, this->endPos);
         copy->SetContext(this->ctx);
+        // copy->isParameterPack = this->isParameterPack;
+        // copy->isMutable = this->isMutable;
         return copy;
     }
 
@@ -4301,6 +4837,7 @@ struct Function : public FunctionBase {
             return FunctionBase::PopulateArguments(argNames, args, execCtx);
         }
         auto mutableArgumentValue = new List({});
+        bool mutableArgumentReplaced = false;
         int i;
         for (i = 0; i < argNames.size() - 1; i++) {
             auto argValue = args[i];
@@ -4308,12 +4845,28 @@ struct Function : public FunctionBase {
             argValue->SetContext(execCtx);
             execCtx->symbols->Set(argName, argValue);
         }
-        for (; i < args.size(); i++) {
-            auto argValue = args[i];
-            argValue->SetContext(execCtx);
-            mutableArgumentValue->elements.push_back(argValue);
+
+        if (!mutableArgumentReplaced) {
+            for (; i < args.size(); i++) {
+                auto argValue = args[i];
+                argValue->SetContext(execCtx);
+
+                if (argValue->typeName == std::string("List")) {
+                    if (As<List>(argValue)->isParameterPack) {
+                        for (auto &&unpackedVal : As<List>(argValue)->elements) {
+                            mutableArgumentValue->elements.push_back(unpackedVal);
+                        }
+                        continue;
+                    }
+                }
+                mutableArgumentValue->elements.push_back(argValue);
+            }
+            execCtx->symbols->Set(this->mutableArgName.substr(1, this->mutableArgName.size() - 2), mutableArgumentValue);
+            if (!mutableArgumentValue->elements.empty()) {
+                execCtx->symbols->Set("$" + this->mutableArgName.substr(1, this->mutableArgName.size() - 2), mutableArgumentValue->AsParameterPack());
+            }
         }
-        execCtx->symbols->Set(this->mutableArgName.substr(1, this->mutableArgName.size() - 2), mutableArgumentValue);
+
         return (new RuntimeResult)->Success(nullptr);
     }
 
@@ -4384,6 +4937,7 @@ struct Function : public FunctionBase {
             for (auto node : frameContext->deferNodes) {
                 auto expr = dynamic_cast<DeferNode *>(node)->deferExpr;
                 if (currentCallStackDepth <= MAX_CALLSTACK_DEPTH) {
+                    frameContext->symbols->Set("__lastexc__", Number::null);
                     result->Register(interpreter->Visit(expr, frameContext));        
                     if (result->ShouldReturn()) {
                         return result;                    
@@ -4570,11 +5124,6 @@ struct Method : public Function {
 };
 
 
-struct BigInt : public Object {
-    
-};
-
-
 void Interprete(const std::string &, const std::string &, InterpreterStartMode, const std::string & = "", Context * = nullptr, Position *parentEntry = nullptr);
 void SetBuiltins(SymbolTable *global);
 const std::vector<std::string> builtinNames { 
@@ -4582,7 +5131,7 @@ const std::vector<std::string> builtinNames {
     "sin", "cos", "tan", "abs", "log", "ln", "sqrt", "isFloating", "isInteger",
     "input", "import", "set", "require",
     "readFile", "writeFile", "append", "concat", "remove", "builtins", "panic", "del",
-    "range", "addressOf", "keys", "values", "global", "recover"
+    "range", "addressOf", "keys", "values", "global", "recover", "BigInteger"
 };
 
 std::map<std::string, std::string> *envVars = nullptr;
@@ -5547,6 +6096,8 @@ namespace builtins {
         }
         return result->Success(Number::null);
     }
+
+    YanObject BigInteger(YanContext ctx);
 }
 
 const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFuncIndexes {
@@ -5585,7 +6136,8 @@ const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFunc
     { "keys", builtins::List_::Keys },
     { "values", builtins::List_::Values },
     { "global", builtins::Global },
-    { "recover", builtins::Recover }
+    { "recover", builtins::Recover },
+    { "BigInteger", builtins::BigInteger }
 };
 
 const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry {
@@ -5622,7 +6174,8 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
     { "keys", { "_dict" } },
     { "values", { "_dict" } },
     { "global", { "_varName", "_value" } },
-    { "recover", { "__ret__" } }
+    { "recover", { "__ret__" } },
+    { "BigInteger", { "__val__" } }
 };
 
 #ifdef __linux__
@@ -5862,7 +6415,8 @@ static std::map<std::string, BuiltinFunction *> allBuiltins {
     { "keys", nullptr }, 
     { "values", nullptr },
     { "global", nullptr },
-    { "recover", nullptr }
+    { "recover", nullptr },
+    { "BigInteger", nullptr }
 };
 
 DylibType OpenDynamicLibrary(const std::string &dylib) {
@@ -5892,6 +6446,93 @@ DylibType OpenDynamicLibrary(const std::string &dylib) {
     #else
         return nullptr;
     #endif
+}
+
+
+struct BigInt : public ClassObject {
+    BigInteger value;
+
+    explicit BigInt(BigInteger value) : value(value), ClassObject({}) {
+        this->typeName = "BigInt";
+    }
+
+    static RuntimeResult *CheckType(Object *other) {
+        auto result = new RuntimeResult;
+        if (other->typeName != std::string("Number") && other->typeName != std::string("BigInt") && other->typeName != std::string("String")) {
+            return result->Failure(new TypeError(
+                std::format("Invilid operation with big integer with type `{}`", other->typeName),
+                other->startPos, other->endPos, other->ctx
+            ));
+        }
+        if (other->typeName == std::string("Number")) {
+            if (!builtins::Math::HoldsInteger(As<Number>(other))) {
+                return result->Failure(new TypeError(
+                    "BigInt could not resolve floating values",
+                    other->startPos, other->endPos, other->ctx
+                ));
+            }
+            return result->Success(new Number(1));
+        }
+        if (other->typeName == std::string("BigInt")) {
+            return result->Success(new Number(2));
+        }
+        return result->Success(new Number(3));
+    }
+
+    static RuntimeResult *Create(Object *val) {
+        auto result = CheckType(val);
+        if (result->ShouldReturn()) {
+            return result;
+        }
+
+        auto v = result->value;
+        if (builtins::Math::GetInt(As<Number>(v)) == 1) {
+            return result->Success(new BigInt(builtins::Math::GetInt(As<Number>(val))));
+        } else if (builtins::Math::GetInt(As<Number>(v)) == 2) {
+            return result->Success(new BigInt(As<BigInt>(val)->value));
+        } else {
+            return result->Success(new BigInt(As<String>(val)->s));
+        }
+    }
+
+    using ObjectWithError = std::pair<Object *, Error *>;
+    ObjectWithError AddTo(Object *other) override {
+        auto result = CheckType(other);
+        if (result->ShouldReturn()) {
+            return std::make_pair(nullptr, result->error);
+        }
+
+        auto v = result->value;
+        if (builtins::Math::GetInt(As<Number>(v)) == 1) {
+            return std::make_pair(new BigInt(this->value + builtins::Math::GetInt(As<Number>(other))), nullptr);
+        } else {
+            return std::make_pair(new BigInt(this->value + As<BigInt>(other)->value), nullptr);
+        }
+    }
+
+    std::string ToString() override {
+        std::stringstream ss;
+        ss << this->value;
+        return ss.str();
+    }
+
+    Object *Copy() override {
+        auto c = new BigInt(this->value);
+        return c; 
+    }
+};
+
+
+builtins::YanObject builtins::BigInteger(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    auto arg = ctx->symbols->Get("__val__");
+
+    Object *val = arg ? arg : Number::null;
+    auto r = result->Register(BigInt::Create(val));
+    if (result->ShouldReturn()) {
+        return result;
+    }
+    return result->Success(r);
 }
 
 auto LoadNativeFunctionImplementation(const std::string &dynamicLib, const std::string &name) -> RuntimeResult *(*)(Context *) {
@@ -6163,13 +6804,6 @@ RuntimeResult *Interpreter::VisitVarAccessNode(NodeBase *node, Context *ctx) {
         ));
     }
 
-    if (value->ctx) {
-        if (value->ctx->external) {
-            // TODO
-            ;
-        }
-    }
-
     // Object *oldValue = value;
     // mutable types & immutable types ? 
     if (value->typeName != std::string("List") && value->typeName != std::string("Dictionary") && value->typeName != std::string("ClassObject")) {
@@ -6421,32 +7055,32 @@ RuntimeResult *Interpreter::VisitFunctionDefinition(NodeBase *node, Context *ctx
         parameters.push_back(*(std::string *) param.value);
     }
 
-    if (funcDefNode->fun.type == TokenType::Invilid) {
-        function = dynamic_cast<Function *>((new Function(funcBody, parameters, funcDefNode->shouldAutoReturn))->SetContext(ctx)->SetPos(node->st, node->et));    
-        return result->Success(function);    
-    } else {
+    if (funcDefNode->fun.type != TokenType::Invilid) {
         function = dynamic_cast<Function *>((new Function(*(std::string *) funcDefNode->fun.value, funcBody, parameters, funcDefNode->shouldAutoReturn))->SetContext(ctx)->SetPos(node->st, node->et));
         ctx->symbols->Set(*(std::string *) funcDefNode->fun.value, function);
-
-        for (auto &fv : funcDefNode->cellVars) {
-            function->cellVars.push_back(*(std::string *) fv->freeVar.value);
-        }
-
-        if (ctx->parent != nullptr) {
-            for (auto &fv : funcDefNode->freeVars) {
-                auto fvName = *(std::string *) fv->freeVar.value;
-                auto fvValue = ctx->symbols->Get(fvName);
-                if (fvValue == nullptr) {
-                    return result->Failure(new RuntimeError(
-                        std::format("'{}' is not a valid freevar", fvName),
-                        fv->st, fv->et, ctx
-                    ));
-                }
-                function->closureVarsTable->Set(fvName, fvValue);
-            }
-        }
-        return result->Success(function);    
+    } else {
+        function = dynamic_cast<Function *>((new Function(funcBody, parameters, funcDefNode->shouldAutoReturn))->SetContext(ctx)->SetPos(node->st, node->et));    
     }
+
+    for (auto &fv : funcDefNode->cellVars) {
+        function->cellVars.push_back(*(std::string *) fv->freeVar.value);
+    }
+
+        // FixMe: Fix REPEAT Code
+    if (ctx->parent != nullptr) {
+        for (auto &fv : funcDefNode->freeVars) {
+            auto fvName = *(std::string *) fv->freeVar.value;
+            auto fvValue = ctx->symbols->Get(fvName);
+            if (fvValue == nullptr) {
+                return result->Failure(new RuntimeError(
+                    std::format("'{}' is not a valid freevar", fvName),
+                    fv->st, fv->et, ctx
+                ));
+            }
+            function->closureVarsTable->Set(fvName, fvValue);
+        }
+    }
+    return result->Success(function);
 }
 
 RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
@@ -6478,7 +7112,6 @@ RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
     if (result->ShouldReturn()) {
         return result;
     }
-    // TODO: Memory management here
     // functionTarget = functionTarget->Copy()->SetPos(node->st, node->et)->SetContext(ctx);
     // functionTarget = functionTarget->Copy()->SetPos(node->st, node->et);
     functionTarget = functionTarget->Copy();
@@ -6742,10 +7375,33 @@ RuntimeResult *Interpreter::VisitSubscription(NodeBase *node, Context *ctx) {
             err->et = node->et;
             return result->Failure(err);
         }
-        if (subNode->subIndexes.size() == 0) {
-            return result->Success(v.first);
+        if (subNode->calls.find(0) == subNode->calls.end()) {   
+            if (subNode->subIndexes.size() == 0) {
+                return result->Success(v.first);
+            }
+        } else {
+            std::vector<Object *> args;
+            for (auto &&argNode : subNode->calls[0]) {
+                auto argValue = result->Register(this->Visit(argNode, ctx));
+                if (result->ShouldReturn()) {
+                    return result;
+                }
+                args.push_back(argValue);
+            }
+            auto ret = result->Register(v.first->Execute(args));
+            if (result->ShouldReturn()) {
+                result->error->st = node->st;
+                result->error->et = node->et;
+                return result;
+            }
+
+            if (subNode->subIndexes.size() == 0) {
+                return result->Success(ret);
+            }
         }
+        
         Object *tmp = v.first;
+        int index = 1;
         for (auto i : subNode->subIndexes) {
             auto sv = result->Register(this->Visit(i, ctx));
             auto subsciptionLayerResult = tmp->Subsciption(sv);
@@ -6755,14 +7411,49 @@ RuntimeResult *Interpreter::VisitSubscription(NodeBase *node, Context *ctx) {
                 err->et = node->et;
                 return result->Failure(err);
             }
-            tmp = subsciptionLayerResult.first;
+            if (subNode->calls.find(index) == subNode->calls.end()) {
+                tmp = subsciptionLayerResult.first->SetContext(ctx)->SetPos(node->st, node->et);;
+            } else {
+                std::vector<Object *> args;
+                for (auto &&argNode : subNode->calls[index]) {
+                    auto argValue = result->Register(this->Visit(argNode, ctx));
+                    if (result->ShouldReturn()) {
+                        return result;
+                    }
+                    args.push_back(argValue);
+                }
+
+                tmp = result->Register(subsciptionLayerResult.first->Execute(args));
+                if (result->ShouldReturn()) {
+                    result->error->st = node->st;
+                    result->error->et = node->et;
+                    return result;
+                }
+            }
+        
+            index++;
         }
-        return result->Success(tmp);        
-    } else {
+        return result->Success(tmp->SetContext(ctx)->SetPos(node->st, node->et));        
+    } else {        
         auto newValue = result->Register(this->Visit(subNode->assignment, ctx));
         if (result->error != nullptr) {
             return result;
         }
+
+        if (subNode->subIndexes.size() == 0 && subNode->calls.find(0) != subNode->calls.end()) {
+            return result->Failure(new RuntimeError(
+                "Unable to assign a new value to a function return value (rvalue)",
+                node->st, node->et, ctx
+            ));
+        }
+
+        if (subNode->calls.find(subNode->subIndexes.size()) != subNode->calls.end()) {
+            return result->Failure(new RuntimeError(
+                "Unable to assign a new value to a function return value (rvalue)",
+                node->st, node->et, ctx
+            ));
+        }
+
         if (subNode->subIndexes.size() == 0) {
             auto status = var->SubsciptionAssignment(indexValue, newValue);
             if (status.second != nullptr) {
@@ -6785,6 +7476,7 @@ RuntimeResult *Interpreter::VisitSubscription(NodeBase *node, Context *ctx) {
             }
             Object *tmp = v.first;
 
+            int index = 1;
             for (unsigned i = 0; i < subNode->subIndexes.size() - 1; i++) {
                 auto sv = result->Register(this->Visit(subNode->subIndexes[i], ctx));
                 auto subsciptionLayerResult = tmp->Subsciption(sv);
@@ -6794,7 +7486,26 @@ RuntimeResult *Interpreter::VisitSubscription(NodeBase *node, Context *ctx) {
                     err->et = node->et;
                     return result->Failure(err);
                 }
-                tmp = subsciptionLayerResult.first;
+                if (subNode->calls.find(index) == subNode->calls.end()) {
+                    tmp = subsciptionLayerResult.first;
+                } else {
+                    std::vector<Object *> args;
+                    for (auto &&argNode : subNode->calls[index]) {
+                        auto argValue = result->Register(this->Visit(argNode, ctx));
+                        if (result->ShouldReturn()) {
+                            return result;
+                        }
+                        args.push_back(argValue);
+                    }
+
+                    tmp = result->Register(subsciptionLayerResult.first->Execute(args));
+                    if (result->ShouldReturn()) {
+                        result->error->st = node->st;
+                        result->error->et = node->et;
+                        return result;
+                    }
+                }
+                index++;
             }
 
             auto lastIndex = result->Register(this->Visit(subNode->subIndexes[subNode->subIndexes.size() - 1], ctx));
@@ -6871,7 +7582,7 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
             }
 
             if (attrNode->subAttrs.size() == 0) {
-                if (vp.first->typeName == "Function") {
+                if (vp.first->typeName == std::string("Function")) {
                     if (As<Function>(vp.first)->parameters.size() > 0) {
                         if (As<Function>(vp.first)->parameters[0] == "self" || As<Function>(vp.first)->parameters[0] == "this") {
                             auto method = Method::FromFunction(As<Function>(vp.first), var, attr);    
@@ -6923,10 +7634,17 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
         // }
         return result->Success(tmp->SetContext(ctx)->SetPos(node->st, node->et));  
     } else {
-        Object *v;        
-        if (attrNode->calls.find(attrNode->subAttrs.size() - 1) != attrNode->calls.end()) {
+        Object *v;
+        if (attrNode->calls.find(0) != attrNode->calls.end() && attrNode->subAttrs.empty()) {
             return result->Failure(new RuntimeError(
-                "Unable to assign a new value a function return value (rvalue)",
+                "Unable to assign a new value to a function return value (rvalue)",
+                node->st, node->et, ctx
+            ));
+        }
+
+        if (attrNode->calls.find(attrNode->subAttrs.size()) != attrNode->calls.end()) {
+            return result->Failure(new RuntimeError(
+                "Unable to assign a new value to a function return value (rvalue)",
                 node->st, node->et, ctx
             ));
         }
@@ -6935,8 +7653,24 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
         if (result->ShouldReturn()) {
             return result;
         }
-        
-        if (attrNode->subAttrs.size() != 0) {
+
+        if (attrNode->calls.find(0) != attrNode->calls.end()) {
+            auto va = var->GetAttr(attr);
+            if (va.first == nullptr) {
+                return result->Failure(va.second);
+            }
+            (va.first)->SetContext(ctx)->SetPos(node->st, node->et);
+            ctx->symbols->Set(std::format("__@attrCall_{}__", *(std::string *) attrNode->attr.value), 
+                TryGenerateMethod(va.first, var, attr));
+            v = result->Register(this->Visit(calls[0], ctx));
+            if (result->ShouldReturn()) {
+                return result;
+            }
+            v = v->SetContext(ctx)->SetPos(node->st, node->et);
+            if (attrNode->subAttrs.size() == 0) {
+                return result->Success(v);
+            }
+        } else {
             auto vp = var->GetAttr(attr);
             v = vp.first;        
             if (vp.second != nullptr) {
@@ -6947,6 +7681,20 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
                 return result->Failure(err);
             }
 
+            if (attrNode->subAttrs.size() == 0) {
+                if (vp.first->typeName == std::string("Function")) {
+                    if (As<Function>(vp.first)->parameters.size() > 0) {
+                        if (As<Function>(vp.first)->parameters[0] == "self" || As<Function>(vp.first)->parameters[0] == "this") {
+                            auto method = Method::FromFunction(As<Function>(vp.first), var, attr);    
+                            return result->Success(method); 
+                        }
+                    }       
+                }
+                return result->Success(vp.first->SetContext(ctx)->SetPos(node->st, node->et));
+            }
+        }
+        
+        if (attrNode->subAttrs.size() != 0) {
             Object *tmp = v;
             Object *self = nullptr;
             std::string ls {};
@@ -7087,16 +7835,24 @@ RuntimeResult *Interpreter::VisitNewExpression(NodeBase *node, Context *ctx) {
         auto access = dynamic_cast<AdvancedVarAccessNode *>(newNode->newExpr)->advancedAccess;
         auto call = access[access.size() - 1];
         if (call->nodeType != NodeType::Attribution) {
-            std::cerr << "Fatal: Interpreter state error [While instantiating objects: 'invilid node']" << std::endl;
-            std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;        
-            assert(false); 
+            // std::cerr << "Fatal: Interpreter state error [While instantiating objects: 'invilid node']" << std::endl;
+            // std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;        
+            // assert(false); 
+            return result->Failure(new RuntimeError(
+                "Invilid access for object prototypes: without attribute access",
+                call->st, call->et, ctx
+            ));
         }
 
         auto caller = dynamic_cast<AttributionNode *>(call)->calls;
         if (caller.size() > 1) {
-            std::cerr << "Fatal: Interpreter state error [While instantiating objects: 'invalid call']" << std::endl;
-            std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;        
-            assert(false);
+            // std::cerr << "Fatal: Interpreter state error [While instantiating objects: 'invalid call']" << std::endl;
+            // std::cerr << "Native call stack traceback:" << std::endl << RuntimeError::GetNativeCallStackInfo() << std::endl;        
+            // assert(false);
+            return result->Failure(new RuntimeError(
+                "Invilid access for object prototypes: with dynamic function call",
+                call->st, call->et, ctx
+            ));
         } else if (caller.size() == 0) {
             goto instantiate;
         }
@@ -7129,7 +7885,7 @@ instantiate:
     if (result->ShouldReturn()) {
         return result;
     }
-    if (functionTarget->typeName != "ClassObject") {
+    if (functionTarget->typeName != std::string("ClassObject")) {
         return result->Failure(new TypeError(
             "Keyword 'new' requires a constructor call",
             functionTarget->startPos, functionTarget->endPos, ctx
@@ -7143,14 +7899,26 @@ instantiate:
             node->st, node->et, ctx
         ));
     }
-    if (ctor->typeName != "Function") {
+    if (ctor->typeName != std::string("Function") && ctor->typeName != std::string("BuiltinFunction")) {
         return result->Failure(new TypeError(
             "Constructor is not callable",
             node->st, node->et, ctx
         ));
     }
     auto returnValueTmp = functionTarget->Copy();
-    auto boundedCtor = Method::FromFunction(As<Function>(ctor), returnValueTmp, std::format("{}.__init__", dynamic_cast<ClassObject *>(functionTarget)->className));
+    Object *boundedCtor = nullptr;
+    if (ctor->typeName == std::string("Function")) {
+        boundedCtor = Method::FromFunction(As<Function>(ctor), returnValueTmp, std::format("{}.__init__", dynamic_cast<ClassObject *>(functionTarget)->className));
+    } else if (ctor->typeName == std::string("BuiltinFunction")) {
+        if (As<BuiltinFunction>(ctor)->dynamicImpl == nullptr) {
+            return result->Failure(new RuntimeError(
+                "Failed to construct object with invilid native constructor",
+                node->st, node->et, ctx
+            ));    
+        }
+
+        boundedCtor = BuiltinMethod::FromBuiltinFunction(As<BuiltinFunction>(ctor), returnValueTmp);
+    }
     boundedCtor->SetPos(node->st, node->et)->SetContext(ctx);
     result->Register(boundedCtor->Execute(args));
     if (result->ShouldReturn()) {
