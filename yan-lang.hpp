@@ -608,6 +608,7 @@ inline std::string ToByteString(const std::wstring& input) {
 
 
 std::string DemangleSymbol(const char *symbol) {
+    #ifdef __linux__
     const std::unique_ptr<char, decltype(&free)> demangled(abi::__cxa_demangle(symbol, 0, 0, 0), &free);
     if (demangled) {
         return demangled.get();
@@ -615,6 +616,9 @@ std::string DemangleSymbol(const char *symbol) {
     else {
         return symbol;
 	}
+    #else
+        return std::string(symbol);
+    #endif
 }
 
 
@@ -971,6 +975,7 @@ public:
     }
 
     static std::string GetNativeCallStackInfo(bool demangle = true, bool colored = true) {
+    #ifdef __linux__
         std::stringstream ss;
         void* addresses[256];
         const int n = backtrace(addresses, std::extent<decltype(addresses)>::value);
@@ -1025,6 +1030,9 @@ public:
             } 
         }
         return rs.str();
+    #else 
+        return "[Platform not supported]";
+    #endif
     }
 
     inline Context *GetContext() {
@@ -6628,6 +6636,8 @@ Interpreter::Interpreter() {
 }
 
 RuntimeResult *Interpreter::Visit(NodeBase *node, Context *ctx) {
+    std::cout << currentCallStackDepth << std::endl;
+
     switch (node->nodeType) {
         case NodeType::Expression:
             return this->VisitExpression(node, ctx);
@@ -7671,7 +7681,13 @@ RuntimeResult *Interpreter::VisitAttribution(NodeBase *node, Context *ctx) {
                 return result->Success(v);
             }
         } else {
-            auto vp = var->GetAttr(attr);
+            auto val = result->Register(this->Visit(attrNode->assignment, ctx));
+            if (result->ShouldReturn()) {
+                result->error->st = node->st;
+                result->error->et = node->et;
+                return result;
+            }
+            auto vp = var->SetAttr(attr, val);
             v = vp.first;        
             if (vp.second != nullptr) {
                 auto err = vp.second;
@@ -8140,7 +8156,7 @@ void Finalize() {
             dlclose(dylib);
         #elif defined(_WIN32)
             auto moduleFinalizer = win32::GetProcAddress(dylib, "Yan_OnDestroy");
-            if (module != nullptr) {
+            if (moduleFinalizer != nullptr) {
                 ((void (*)()) moduleFinalizer)();
             }
             win32::FreeLibrary(dylib);

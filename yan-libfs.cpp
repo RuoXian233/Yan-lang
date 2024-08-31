@@ -365,7 +365,7 @@ YAN_C_API_START builtins::YanModule *YanModule_OnLoad() {
     ->AddSymbol("GetFileType", { "_path" })
     ->AddSymbol("Exists", { "_path" })
     ->AddSymbol("GetFilePermissions", { "_path" })
-    ->AddSymbol("GetFreeSpace", { "_path" })
+    ->AddSymbol("_GetFreeSpace", { "_path" })
     ->AddSymbol("GetFileSize", { "_file" })
     ->AddSymbol("FormatSize", { "_num" })
     ->AddSymbol("GetLastWriteTime", { "_path" })
@@ -578,7 +578,7 @@ YAN_C_API_START builtins::YanObject GetFilePermissions(builtins::YanContext ctx)
         auto stat = std::filesystem::status(filePath);  
         if (!std::filesystem::exists(stat)) {
             return result->Failure(new OSError(
-            std::format("Path '{}' does not exists", filePath.native()),
+            std::format("Path '{}' does not exists", filePath.string()),
             arg->startPos, arg->endPos, ctx
             ));
         }
@@ -626,7 +626,7 @@ YAN_C_API_START builtins::YanObject Exists(builtins::YanContext ctx) {
 }
 YAN_C_API_END
 
-YAN_C_API_START builtins::YanObject GetFreeSpace(builtins::YanContext ctx) {
+YAN_C_API_START builtins::YanObject _GetFreeSpace(builtins::YanContext ctx) {
     auto result = new RuntimeResult;
     auto arg = ctx->symbols->Get("_path");
     if (arg->typeName != std::string("String")) {
@@ -641,7 +641,7 @@ YAN_C_API_START builtins::YanObject GetFreeSpace(builtins::YanContext ctx) {
         auto stat = std::filesystem::status(filePath);
         if (!std::filesystem::exists(stat)) {
             return result->Failure(new OSError(
-                std::format("Path '{}' does not exists", filePath.native()),
+                std::format("Path '{}' does not exists", filePath.string()),
                 arg->startPos, arg->endPos, ctx
             ));
         }
