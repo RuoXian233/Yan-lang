@@ -1,0 +1,8 @@
+var C = { \
+    '__cls__': 'C', \
+    '__init__': function(this) -> this.value = this \
+}
+
+
+var c = new C()
+println(c.value.value)

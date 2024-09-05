@@ -1,2 +1,3 @@
 #1 : cannot use indexes or function calls in `new` expression (which will trigger a runtime error)
-#2 : functions in 'inspect' may failed to work on win32 due to unknown 'StackOverFlow' Error
+#2 : functions in 'inspect' may failed to work on win32 due to unknown 'StackOverFlow' Error [FIXED]
+#3 : repl on win32 failed to parse utf-8 identifiers and strings (tested ok when interpreting script from a file)

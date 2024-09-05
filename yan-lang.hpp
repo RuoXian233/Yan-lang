@@ -129,8 +129,8 @@ const std::map<std::string, std::string> REVERSED_ESCAPE_CHARACTERS {
 
 const std::string compilationTimeStamp = std::format("({}, {})", __DATE__, __TIME__);
 bool debug = false;
-const unsigned MAX_CALLSTACK_DEPTH = 50;
-long currentCallStackDepth = 0;
+const long MAX_CALLSTACK_DEPTH = 50;
+static long currentCallStackDepth = 0;
 unsigned overflowCount = 0;
 const unsigned INVILID_OVERFLOW_TOLERANCE = 10;
 
@@ -3543,13 +3543,8 @@ struct Object {
         return std::make_pair(nullptr, this->IllegalOperation(other, "/"));
     }
 
-    virtual std::pair<Object *, Error *> GetCompEquals(Object *other) {
-        return std::make_pair(nullptr, this->IllegalOperation(other, "=="));
-    }
-
-    virtual std::pair<Object *, Error *> GetCompNequals(Object *other) {
-        return std::make_pair(nullptr, this->IllegalOperation(other, "!="));   
-    }
+    virtual std::pair<Object *, Error *> GetCompEquals(Object *other);
+    virtual std::pair<Object *, Error *> GetCompNequals(Object *other);
     
     virtual std::pair<Object *, Error *> GetCompLt(Object *other) {
         return std::make_pair(nullptr, this->IllegalOperation(other, "<"));   
@@ -4186,6 +4181,23 @@ struct SymbolTable final {
         return ss.str();
     }
 };
+
+
+std::pair<Object *, Error *> Object::GetCompEquals(Object *other) {
+    if (std::string(this->typeName) != std::string(other->typeName)) {
+        return std::make_pair(new Number(0), nullptr);
+    }
+    return std::make_pair(new Number((void *) this == (void *) other), nullptr);
+    // return std::make_pair(nullptr, this->IllegalOperation(other, "=="));
+}
+
+std::pair<Object *, Error *> Object::GetCompNequals(Object *other) {
+    if (std::string(this->typeName) == std::string(other->typeName)) {
+        return std::make_pair(new Number(1), nullptr);
+    }
+    return std::make_pair(new Number((void *) this != (void *) other), nullptr);
+    // return std::make_pair(nullptr, this->IllegalOperation(other, "!="));   
+}
 
 struct String : public Object {
     using ObjectWithError = std::pair<Object *, Error *>;
@@ -5036,7 +5048,16 @@ struct ClassObject : public Dictionary {
                 } else if (v->typeName == std::string("String")) {
                     vs = std::format("'{}'", v->ToString());
                 } else {
-                    vs = v->ToString();
+                    if (v->typeName == std::string("ClassObject")) {
+                        auto co = As<ClassObject>(v);
+                        if (co->className == this->className) {
+                            vs = "[this]";
+                        } else {
+                            vs = std::format("[Object {}]", co->className);
+                        }
+                    } else  {
+                        vs = v->ToString();
+                    }
                 }
                 ss << std::format("'{}': ", k->ToString());
                 ss << CYAN;
@@ -6518,6 +6539,26 @@ struct BigInt : public ClassObject {
         }
     }
 
+    ObjectWithError GetCompEquals(Object *other) override {
+        if (other->typeName != std::string("BigInt")) {
+            return std::make_pair(new Number(0), nullptr);
+        } else if (other->typeName == std::string("Number")) {
+            if (!builtins::Math::HoldsInteger(As<Number>(other))) {
+                return std::make_pair(new Number(0), nullptr);
+            }
+            return std::make_pair(new Number(this->value == builtins::Math::GetInt(As<Number>(other))), nullptr);
+        }
+        return std::make_pair(new Number(this->value == As<BigInt>(other)->value), nullptr);
+    }
+
+    ObjectWithError GetCompNequals(Object *other) override {
+        auto result = this->GetCompEquals(other);
+        if (result.second) {
+            return std::make_pair(nullptr, result.second);
+        }
+        return std::make_pair(new Number((int) !result.first->AsBool()), nullptr);
+    }
+
     std::string ToString() override {
         std::stringstream ss;
         ss << this->value;
@@ -6636,8 +6677,6 @@ Interpreter::Interpreter() {
 }
 
 RuntimeResult *Interpreter::Visit(NodeBase *node, Context *ctx) {
-    std::cout << currentCallStackDepth << std::endl;
-
     switch (node->nodeType) {
         case NodeType::Expression:
             return this->VisitExpression(node, ctx);
@@ -7780,6 +7819,7 @@ RuntimeResult *Interpreter::VisitAttributionCall(NodeBase *node, Context *ctx) {
 
     currentCallStackDepth++;
     if (currentCallStackDepth >= MAX_CALLSTACK_DEPTH) {
+        std::cout << currentCallStackDepth << std::endl;
         currentCallStackDepth = 0;
         return result->Failure(new RuntimeError(
             std::format("Maximum call stack depth ({}) exceeded, recompile the source and change MAX_CALLSTACK_DEPTH to extend stack capacity", MAX_CALLSTACK_DEPTH),
