@@ -1,0 +1,20 @@
+import('sdl2')
+import('string')
+
+sdl2.init()
+
+var window = sdl2.createWindow('Hello, sdl2 from yan-lang', 1366, 768)
+var renderer = sdl2.createRenderer(window, -1)
+var running = true
+
+while running then
+    for event in sdl2.pollEvent() then
+        if event.type == sdl2.QUIT then
+            var running = false
+        end
+    end 
+end
+
+sdl2.destroyRenderer(renderer)
+sdl2.destroyWindow(window)
+sdl2.quit()

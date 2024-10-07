@@ -1,0 +1,11 @@
+var QUIT = 256
+var WINDOW_RESIZABLE = 32
+
+
+var init = require('@sdl2.Init')
+var quit = require('@sdl2.Quit')
+var createWindow = require('@sdl2.CreateWindow')
+var destroyWindow = require('@sdl2.DestroyWindow')
+var createRenderer = require('@sdl2.CreateRenderer')
+var destroyRenderer = require('@sdl2.DestroyRenderer')
+var pollEvent = require('@sdl2.PollEvent')

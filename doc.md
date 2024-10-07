@@ -10,7 +10,7 @@
 2. 环境配置
     - 从 Release 下载安装包
     - 释放到一个目录中，将可执行文件所在目录添加至环境变量
-    - 自带编辑器，调试器正在开发中，测试编辑器在安装目录 yan-editor 文件夹内，main.py为入口
+    - 自带编辑器，调试器正在开发中，测试编辑器在安装目录 yan-editor 文件夹内，main.py 为入口 (已弃用)
     
 
 3. 编写第一个 Yan 程序 **(注: 以下 Markdown 语法着色均为 javascript)**
@@ -936,11 +936,11 @@ ____
 
     9.3 Yan 异常与 defer 语句
     
-    Yan 没有异常处理子句，用户自定义的异常可以由 `panic()` 引发崩溃，解释器的运行时异常和 panic 无法恢复 (机制待完善)
+    Yan 没有异常处理子句，用户自定义的异常可以由 `panic()` 引发崩溃，解释器的运行时异常和 panic 可用一定手段恢复
 
     解释器异常分为如下类别:
 
-    - 词法/语法错误 (parse error)
+    - 词法/语法错误 (parse/syntax error)
     - 运行时错误 (runtime error)
     - 致命错误 (fatal error)
     - panic
@@ -980,8 +980,127 @@ ____
         yan: yan-lang.hpp:5874: RuntimeResult* (* LoadNativeFunctionImplementation(const std::string&, const std::string&))(Context*): 
           Assertion `dylib != nullptr' failed.
         Aborted (core dumped)
+
+        // 此报错信息因平台而异，此处为普通 GNU/Linux 上运行时的信息
     ```
 
-    `defer` 语句用于在函数调用链中引发异常后自动执行一段代码，常用于资源释放，如文件关闭等
+    `defer` 语句用于在函数调用链中引发异常后自动执行一段代码，常用于资源释放，如文件关闭等。
+    - 无论函数是否引发异常，`defer` 语句一定会执行
+
     
     在 `defer` 语句中执行的代码可以选择将程序从异常中恢复，并继续执行后续代码，或是直接退出程序
+
+    因此 `defer` 语句是 yan 语言中重要的异常处理方式
+
+    ```javascript
+        function f()
+            var x = 1 / 0 // 此处引发 RuntimeError: Division by zero
+        end
+
+        f() // 直接调用 f 会引发运行时异常
+
+        // 现在我们定义一个异常处理函数
+        function handler()
+            println('Exception occured!')
+        end
+
+        function g()
+            // defer 后可以跟一个表达式，一般都是函数调用，写在可能会发生异常的代码块之前
+            defer handler()
+            var x = 1 / 0
+        end
+
+        g() // 调用 g，会发现在原有的报错信息之前增加了 handler() 内的输出
+
+        // 输出示例
+        Exception occurred!
+        RuntimeError: Division by zero
+            (Possibly related source: `...`)
+        Stack Traceback:
+            ...
+
+        // 异常还是引发了，但是我们成功的在异常结束之前执行了操作
+    ```
+
+    若是我们希望从异常中恢复，可以在 `defer` 语句制定的错误处理函数中使用 `recover()` 函数
+    - `recover()` 函数有一个可选参数，可以是任意类型的值，用于发生错误时替代原有函数的返回值
+
+    ```javascript
+        function handler()
+            println('Error occured!')
+            recover()
+            // 执行 recover 后，异常将会被清除，发生异常的立即函数返回值，程序会继续运行
+        end
+
+        function f()
+            defer handler()
+            var x = 1 / 0
+        end
+
+        f()
+        println('Recover from error!')
+
+        // 输出
+        Error occured!
+        Recover from error!
+
+        // 若是发生异常的函数需要有特定返回值，可以传入 recover()
+
+        function newHandler()
+            println('Error occured! Return a string `error`')
+            recover('error')
+        end
+
+        function g()
+            defer newHandler()
+            var x = 1 / 0
+        end
+
+        var result = g()
+        println('Recover from error, result: ' + result)
+
+        // 输出
+        Error occured! Return a string `error`
+        Recover from error, result: error
+
+        function h()
+            // 若不需要异常处理函数，只需捕获异常，也可以直接 defer recover()
+            defer recover()
+            var x = 1 / 0
+        end
+    ```
+
+    若是希望了解异常发生的具体信息，以及解释器运行状态，我们介绍另一个内置库 `inspect`， 以及 `__lastexc__` 这个特殊变量的使用
+
+    - 先来看 `__lastexc__`，这是一个会在异常处理函数（即 `defer` 关键字后调用的自定义函数）中自动定义的一个变量，它是一个字典，包含了上次发生异常的信息:
+    - **category**: 异常具体类别，如 `RuntimeError`, `TypeError`
+    - **details**: 异常描述信息
+    - **filename**: 发生异常的文件名
+    - **line**: 异常引发的行号
+    - **column**: 异常引发的代码位置 (配合行号定位)
+    - 除行列号为数字类型，其余均为字符串形式
+
+    下面是 `__lastexc__` 的使用
+
+    ```javascript
+        // 导入一下 format 函数，方便输出信息
+        var format = import('string.format')
+
+        function handler()
+            var exc = __lastexc__
+            println(format('Caught Error: %s: %s [at %s:%d]', exc.category, exc.details, exc.filename, exc.line))
+            recover()
+        end
+
+        function f()
+            defer handler()
+            var x = 1 / 0
+        end
+
+        f()
+        println('Recovered')
+
+        // 示例输出
+        Caught Error: RuntimeError: Division by zero [at debug.yan:11]
+        Recovered
+    ```

@@ -41,4 +41,3 @@ function parseNativeCallStackInfo(info)
 	end
 	return stack
 end
-

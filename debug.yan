@@ -1,1 +1,14 @@
-f().a
+var format = import('string.format')
+
+        function handler()
+            var exc = __lastexc__
+            println(format('Caught Error: %s: %s [at %s:%d]', exc.category, exc.details, exc.filename, exc.line))
+            recover()
+        end
+
+        function f()
+            defer handler()
+            var x = 1 / 0
+        end
+
+        f()

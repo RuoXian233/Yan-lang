@@ -49,6 +49,7 @@
 #include <codecvt>
 #include <iomanip>
 #include <cstring>
+#include <cstdint>
 
 
 const char *YAN_LANG_VERSION = "2.0";
@@ -73,7 +74,7 @@ const std::vector<std::string> LETTERS_WITH_DIGITS {
 
 const std::vector<std::string> KEYWORDS {
     "var", "and", "or", "not", "if", "elif", "then", "else", "for", "while", "step", "to", "function", "end", "return", "continue", "break", "in", "new", "nonlocal",
-    "defer"
+    "defer", "struct"
 };
 
 const std::vector<std::string> STATEMENT_SEPERATORS {
@@ -119,7 +120,7 @@ const std::map<std::string, std::string> REVERSED_ESCAPE_CHARACTERS {
 #elif defined(__linux__)
     #include <dlfcn.h>
     #include <execinfo.h>
-    #include <cxxabi.h>
+    #include <cxxabi.h> 
     const char *platform = "linux";
 #elif defined(__APPLE__)
     const char *platform = "darwin"
@@ -136,6 +137,13 @@ const unsigned INVILID_OVERFLOW_TOLERANCE = 10;
 
 
 class BigInteger {
+    using size_t = std::size_t;
+
+public:
+    std::vector<int> GetInternalValue() {
+        return num;
+    }
+
 private:
     static const int BASE = 100000000;
     static const int WIDTH = 8;
@@ -821,7 +829,7 @@ static inline std::vector<std::string> Split(const std::string &str, const std::
         std::wstring wstr = ToWideString(str);
         wstr += wsplitter;
 
-        size_t pos = wstr.find(wsplitter);
+        std::size_t pos = wstr.find(wsplitter);
         int step = wsplitter.length();
 
         while (pos != wstr.npos) {
@@ -1437,6 +1445,7 @@ enum class NodeType {
     SubscriptionCall,
     NonlocalStatement,
     Defer,
+    StructDefStmt,
     Invilid
 };
 
@@ -1573,10 +1582,21 @@ struct ListNode : public NodeBase {
         }
 };
 
+struct StructDefStmtNode : public NodeBase {
+    Token structName;
+    std::vector<Token> args;
+
+    explicit StructDefStmtNode(Token sn, const std::vector<Token> &args = {}) : structName(sn), NodeBase(NodeType::StructDefStmt) {
+        this->st = sn.st;
+        this->et = sn.et;
+        this->args = args;
+    }
+};
+
 struct ParseResult final {
     Error *err;
     NodeBase *ast;
-    size_t advancedCount;
+    std::size_t advancedCount;
     unsigned reverseCount;
 
     explicit ParseResult() : err(nullptr), ast(nullptr), advancedCount(0), reverseCount(0) {}
@@ -2007,6 +2027,65 @@ public:
 
             auto deferExpr = result->Register(this->Expr());
             return result->Success(new DeferNode(deferExpr, posStart, this->currentToken.st));
+        } else if (this->currentToken.Matches<std::string>(TokenType::Keyword, "struct")) {
+            result->RegisterAdvance();
+            this->Advance();
+
+            auto sn = this->currentToken;
+            if (sn.type != TokenType::Identifier) {
+                return result->Failure(new SyntaxError(
+                    "`struct` requires an identifier",
+                    sn.st, sn.et
+                ));
+            }
+            result->RegisterAdvance();
+            this->Advance();
+            if (this->currentToken.type == TokenType::LSquare) {
+                result->RegisterAdvance();
+                this->Advance();
+                Tokens ctorParams;
+                if (this->currentToken.type == TokenType::RSquare) {
+                    return result->Failure(new SyntaxError(
+                        "Empty and explicitly constructor parameters list",
+                        this->currentToken.st, this->currentToken.et
+                    ));
+                }
+                if (this->currentToken.type != TokenType::Identifier) {
+                    return result->Failure(new SyntaxError(
+                        "Constructor parameters invalid",
+                        this->currentToken.st, this->currentToken.et
+                    ));
+                }
+                ctorParams.push_back(this->currentToken);
+                result->RegisterAdvance();
+                this->Advance();
+
+                while (this->currentToken.type == TokenType::Comma) {
+                    result->RegisterAdvance();
+                    this->Advance();
+                    if (this->currentToken.type != TokenType::Identifier) {
+                     return result->Failure(new SyntaxError(
+                        "Constructor parameters invalid",
+                        this->currentToken.st, this->currentToken.et
+                    ));
+                    }
+                    ctorParams.push_back(this->currentToken);
+                    result->RegisterAdvance();
+                    this->Advance();
+                }
+
+                if (this->currentToken.type != TokenType::RSquare) {
+                    return result->Failure(new SyntaxError(
+                        "'[' mismatched",
+                        this->currentToken.st, this->currentToken.et
+                    ));
+                }
+                result->RegisterAdvance();
+                this->Advance();
+                return result->Success(new StructDefStmtNode(sn, ctorParams));
+            } else {
+                return result->Success(new StructDefStmtNode(sn));
+            }
         }
 
         if (this->currentToken.Matches<std::string>(TokenType::Keyword, "continue")) {
@@ -4696,6 +4775,7 @@ public:
     RuntimeResult *VisitAdvancedVarAccess(NodeBase *node, Context *ctx);
     RuntimeResult *VisitNewExpression(NodeBase *node, Context *ctx);
     RuntimeResult *VisitAttributionCall(NodeBase *node, Context *ctx);
+    RuntimeResult *VisitStructDef(NodeBase *node, Context *ctx);
     RuntimeResult *VisitNonlocal(NodeBase *node, Context *ctx);
     RuntimeResult *VisitDefer(NodeBase *node, Context *ctx);
     std::vector<Context *> *GetCallStack() { return this->callStack; }
@@ -5160,7 +5240,7 @@ const std::vector<std::string> builtinNames {
     "sin", "cos", "tan", "abs", "log", "ln", "sqrt", "isFloating", "isInteger",
     "input", "import", "set", "require",
     "readFile", "writeFile", "append", "concat", "remove", "builtins", "panic", "del",
-    "range", "addressOf", "keys", "values", "global", "recover", "BigInteger"
+    "range", "addressOf", "keys", "values", "global", "recover", "BigInteger", "exit"
 };
 
 std::map<std::string, std::string> *envVars = nullptr;
@@ -6127,6 +6207,26 @@ namespace builtins {
     }
 
     YanObject BigInteger(YanContext ctx);
+
+    YanObject Exit(YanContext ctx) {
+        auto arg = ctx->symbols->Get("__code__");
+        int exitCode = 0;
+        if (arg) {
+            if (arg->typeName != std::string("Number")) {
+                auto nv = As<Number>(arg);
+                if (!Math::HoldsInteger(nv)) {
+                    return (new RuntimeResult)->Failure(new TypeError(
+                        "Exit code requires an integer",
+                        arg->startPos, arg->endPos, ctx
+                    ));
+                }
+                exitCode = Math::GetInt(nv);
+            }
+        }
+
+        exit(exitCode);
+        return (new RuntimeResult)->Success(nullptr);
+    }
 }
 
 const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFuncIndexes {
@@ -6166,7 +6266,8 @@ const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFunc
     { "values", builtins::List_::Values },
     { "global", builtins::Global },
     { "recover", builtins::Recover },
-    { "BigInteger", builtins::BigInteger }
+    { "BigInteger", builtins::BigInteger },
+    { "exit", builtins::Exit }
 };
 
 const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry {
@@ -6204,7 +6305,8 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
     { "values", { "_dict" } },
     { "global", { "_varName", "_value" } },
     { "recover", { "__ret__" } },
-    { "BigInteger", { "__val__" } }
+    { "BigInteger", { "__val__" } },
+    { "exit", { "__code__" } }
 };
 
 #ifdef __linux__
@@ -6329,6 +6431,34 @@ struct BuiltinFunction : public FunctionBase {
     }
 };
 
+YAN_C_API_START builtins::YanObject Class_Default__init__(builtins::YanContext ctx) {
+    auto self = ctx->symbols->Get("self");
+    auto requiredArgs = self->GetAttr("__ctor_args__");
+    if (requiredArgs.first->typeName == std::string("Number")) {
+        return (new RuntimeResult)->Success(Number::null);
+    } else {
+        for (const auto item : As<List>(requiredArgs.first)->elements) {
+            auto attr = As<String>(item)->s;
+            auto value = ctx->symbols->Get(attr);
+            if (!value) {
+                return (new RuntimeResult)->Failure(
+                    new TypeError(
+                        "Missing required constructor args",
+                        self->startPos, self->endPos, ctx
+                    )
+                );
+            }
+            self->SetAttr(attr, value);
+        }
+    }
+
+    return (new RuntimeResult)->Success(Number::null);
+}
+YAN_C_API_END
+
+BuiltinFunction *defaultInitializer = nullptr;
+
+
 struct BuiltinMethod : public BuiltinFunction {
     Object *self;
 
@@ -6445,7 +6575,8 @@ static std::map<std::string, BuiltinFunction *> allBuiltins {
     { "values", nullptr },
     { "global", nullptr },
     { "recover", nullptr },
-    { "BigInteger", nullptr }
+    { "BigInteger", nullptr },
+    { "exit", nullptr }
 };
 
 DylibType OpenDynamicLibrary(const std::string &dylib) {
@@ -6478,11 +6609,19 @@ DylibType OpenDynamicLibrary(const std::string &dylib) {
 }
 
 
+YAN_C_API_START 
+    builtins::YanObject BigInt_ToString(builtins::YanContext ctx);
+YAN_C_API_END
+
 struct BigInt : public ClassObject {
     BigInteger value;
+    BuiltinFunction *BigInt_ToStringFunc = nullptr;
 
     explicit BigInt(BigInteger value) : value(value), ClassObject({}) {
         this->typeName = "BigInt";
+        this->BigInt_ToStringFunc = new BuiltinFunction("BigInt_ToString");
+        this->BigInt_ToStringFunc->Bind({ "self" }, BigInt_ToString);
+        this->SetAttr("toString", BuiltinMethod::FromBuiltinFunction(this->BigInt_ToStringFunc, this));
     }
 
     static RuntimeResult *CheckType(Object *other) {
@@ -6539,6 +6678,48 @@ struct BigInt : public ClassObject {
         }
     }
 
+    ObjectWithError SubstractedBy(Object *other) override {
+        auto result = CheckType(other);
+        if (result->ShouldReturn()) {
+            return std::make_pair(nullptr, result->error);
+        }
+
+        auto v = result->value;
+        if (builtins::Math::GetInt(As<Number>(v)) == 1) {
+            return std::make_pair(new BigInt(this->value - builtins::Math::GetInt(As<Number>(other))), nullptr);
+        } else {
+            return std::make_pair(new BigInt(this->value - As<BigInt>(other)->value), nullptr);
+        }
+    }
+
+    ObjectWithError MultipliedBy(Object *other) override {
+        auto result = CheckType(other);
+        if (result->ShouldReturn()) {
+            return std::make_pair(nullptr, result->error);
+        }
+
+        auto v = result->value;
+        if (builtins::Math::GetInt(As<Number>(v)) == 1) {
+            return std::make_pair(new BigInt(this->value * builtins::Math::GetInt(As<Number>(other))), nullptr);
+        } else {
+            return std::make_pair(new BigInt(this->value * As<BigInt>(other)->value), nullptr);
+        }
+    }
+
+    ObjectWithError DividedBy(Object *other) override {
+        auto result = CheckType(other);
+        if (result->ShouldReturn()) {
+            return std::make_pair(nullptr, result->error);
+        }
+
+        auto v = result->value;
+        if (builtins::Math::GetInt(As<Number>(v)) == 1) {
+            return std::make_pair(new BigInt(this->value / builtins::Math::GetInt(As<Number>(other))), nullptr);
+        } else {
+            return std::make_pair(new BigInt(this->value / As<BigInt>(other)->value), nullptr);
+        }
+    }
+
     ObjectWithError GetCompEquals(Object *other) override {
         if (other->typeName != std::string("BigInt")) {
             return std::make_pair(new Number(0), nullptr);
@@ -6570,6 +6751,21 @@ struct BigInt : public ClassObject {
         return c; 
     }
 };
+
+builtins::YanObject BigInt_ToString(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    auto self = ctx->symbols->Get("self");
+    assert(self->typeName == std::string("BigInt") && "Type mismatched: Internal interpreter error");
+    auto value = As<BigInt>(self);
+    auto v = value->value.GetInternalValue();
+    std::vector<std::string> tmp;
+    for (auto digit : v) {
+        tmp.push_back(std::to_string(digit));
+    }
+
+    std::reverse(tmp.begin(), tmp.end());
+    return result->Success(new String(Join(tmp, "")));
+}
 
 
 builtins::YanObject builtins::BigInteger(builtins::YanContext ctx) {
@@ -6724,6 +6920,8 @@ RuntimeResult *Interpreter::Visit(NodeBase *node, Context *ctx) {
             return this->VisitNonlocal(node, ctx);
         case NodeType::Defer:
             return this->VisitDefer(node, ctx);
+        case NodeType::StructDefStmt:
+            return this->VisitStructDef(node, ctx);
         case NodeType::Invilid:
             return this->VisitEmpty(node, ctx);
     }
@@ -7955,14 +8153,15 @@ instantiate:
             node->st, node->et, ctx
         ));
     }
-    if (ctor->typeName != std::string("Function") && ctor->typeName != std::string("BuiltinFunction")) {
+    if (ctor->typeName != std::string("Function") && ctor->typeName != std::string("BuiltinFunction") && ctor->typeName != std::string("BuiltinMethod")) {
         return result->Failure(new TypeError(
             "Constructor is not callable",
             node->st, node->et, ctx
         ));
     }
     auto returnValueTmp = functionTarget->Copy();
-    Object *boundedCtor = nullptr;
+    // auto returnValueTmp = functionTarget;
+    Object *boundedCtor = nullptr; 
     if (ctor->typeName == std::string("Function")) {
         boundedCtor = Method::FromFunction(As<Function>(ctor), returnValueTmp, std::format("{}.__init__", dynamic_cast<ClassObject *>(functionTarget)->className));
     } else if (ctor->typeName == std::string("BuiltinFunction")) {
@@ -7972,10 +8171,14 @@ instantiate:
                 node->st, node->et, ctx
             ));    
         }
-
         boundedCtor = BuiltinMethod::FromBuiltinFunction(As<BuiltinFunction>(ctor), returnValueTmp);
+    } else {
+        boundedCtor = ctor;
+        // TODO: Deprecated & danger operation note: Modification to linked object of a bounded method
+        As<BuiltinMethod>(boundedCtor)->self = returnValueTmp;
     }
-    boundedCtor->SetPos(node->st, node->et)->SetContext(ctx);
+    // boundedCtor->SetPos(node->st, node->et)->SetContext(ctx);
+    boundedCtor->SetPos(node->st, node->et);
     result->Register(boundedCtor->Execute(args));
     if (result->ShouldReturn()) {
         result->error->st = node->st;
@@ -8021,6 +8224,48 @@ RuntimeResult *Interpreter::VisitDefer(NodeBase *node, Context *ctx) {
     return result->Success(Number::null);
 }
 
+RuntimeResult *Interpreter::VisitStructDef(NodeBase *node, Context *ctx) {
+    auto result = new RuntimeResult;
+
+    auto defNode = dynamic_cast<StructDefStmtNode *>(node);
+    auto structName = *(std::string *) defNode->structName.value;
+    
+    Object *ctorList = Number::null;
+    if (!defNode->args.empty()) {
+        std::vector<Object *> v;
+        for (const auto &p : defNode->args) {
+            v.push_back(new String(*(std::string *) p.value));
+        }
+        ctorList = new List(v);
+    }
+    
+    auto Class = new ClassObject({
+        { new String("__cls__"), new String(structName) },
+        { new String("__ctor_args__"), ctorList },
+        { new String("__init__"), Number::null }
+    });
+
+    // Here is a temproarily bind of method
+    if (defNode->args.empty()) {
+        Class->SetAttr("__init__", BuiltinMethod::FromBuiltinFunction(defaultInitializer, Class));
+    } else {
+        auto customCtor = new BuiltinFunction(std::format("{}__init__", structName));
+        std::vector<std::string> argList = { "self" };
+        for (const auto &p : defNode->args) {
+            argList.push_back(*(std::string *) p.value);
+        }
+        customCtor->Bind(argList, Class_Default__init__);
+        Class->SetAttr("__init__", BuiltinMethod::FromBuiltinFunction(customCtor, Class));
+    }
+    result->Register(Class->BuildClass());
+    if (result->ShouldReturn()) {
+        return result;
+    }
+    Class->SetPos(node->st, node->et)->SetContext(ctx);
+    ctx->symbols->Set(structName, Class);
+    return result->Success(Number::null);
+}
+
 Interpreter::~Interpreter() = default;
 
 void Initialize() {
@@ -8028,6 +8273,7 @@ void Initialize() {
     // globalSymbolTable->Set("null", new Number(0));
     globalSymbolTable->Set("false", new Number(0));
     globalSymbolTable->Set("true", new Number(1));
+    globalSymbolTable->Set("pass", Number::null);
     // globalSymbolTable->Set("pi", new Number(3.141592653589793238462));
     globalSymbolTable->Set("null", Number::null);
     InitializeBuiltins();
@@ -8035,6 +8281,9 @@ void Initialize() {
 
     builtins::AllocEnvVars();
     builtins::RestoreEnvVar();
+
+    defaultInitializer = new BuiltinFunction("_default__init__");
+    defaultInitializer->Bind({ "self" }, Class_Default__init__);
 }
 
 bool startAsShell = false;
