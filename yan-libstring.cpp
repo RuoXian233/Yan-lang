@@ -402,6 +402,26 @@ YAN_C_API_START builtins::YanObject Repeat(builtins::YanContext ctx) {
 YAN_C_API_END
 
 YAN_C_API_START builtins::YanObject Find(builtins::YanContext ctx) {
+    auto result = new RuntimeResult;
+    YAN_CONTEXT_DECORATION(Find);
+    auto arg = ctx->symbols->Get("_src");
+    auto arg2 = ctx->symbols->Get("_sub");
+
+    if (!CheckArg(arg)) {
+        return result->Failure(YanString_ThrowExc(YAN_STRING_NOT_A_STRING, arg, ctx));
+    }
+    if (!CheckArg(arg2)) {
+        return result->Failure(YanString_ThrowExc(YAN_STRING_NOT_A_STRING, arg2, ctx));
+    }
+
+    auto src = As<String>(arg)->s;
+    auto sub = As<String>(arg2)->s;
+
+    auto pos = src.find(sub);
+    if (pos == std::string::npos) {
+        return result->Success(new Number(-1));
+    }
+    return result->Success(new Number(static_cast<int>(pos)));
 }
 YAN_C_API_END
 

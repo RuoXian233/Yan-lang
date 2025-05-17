@@ -3,6 +3,8 @@ import('string')
 
 sdl2.init()
 
+println(sdl2.acos(0.5))
+
 var window = sdl2.createWindow('Hello, sdl2 from yan-lang', 1366, 768)
 var renderer = sdl2.createRenderer(window, -1)
 var running = true

@@ -1,2 +1,5 @@
 var fetch = require('@time.Fetch')
-var now = require('@time.Now')
+var now = require('@time.Secs')
+var nanoSecs = require('@time.NanoSecs')
+var miliSecs = require('@time.MiliSecs')
+var microSecs = require('@time.MicroSecs')

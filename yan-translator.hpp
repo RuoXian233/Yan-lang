@@ -53,8 +53,25 @@ public:
             return this->VisitNonlocal(node);
         case NodeType::Defer:
             return this->VisitDefer(node);
+        case NodeType::StructDefStmt:
+            return this->VisitStructDef(node);
+        case NodeType::UseStmt:
+            return this->VisitUse(node);
         }
         return "";
+    }
+
+    std::string VisitStructDef(NodeBase *node) {
+        auto structDefNode = dynamic_cast<StructDefStmtNode *>(node);
+        std::stringstream attrFormatter, initalizerFormatter;
+        if (!structDefNode->args.empty()) {
+            initalizerFormatter << std::format("def _{}__init__predef__(", *(std::string *) structDefNode->structName.value);
+        }
+    }
+
+    std::string VisitUse(NodeBase *node) {
+        auto useNode = dynamic_cast<UseStmtNode *>(node);
+        return std::format("yan_builtin_impl_import('{}')", useNode->arg);
     }
 
     std::string VisitExpression(NodeBase *node) {

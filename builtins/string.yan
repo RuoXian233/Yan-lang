@@ -7,5 +7,6 @@ var startsWith = require('@string.StartsWith')
 var endsWith = require('@string.EndsWith')
 var repeat = require('@string.Repeat')
 var substitute = require('@string.Substitute')
+var find = require('@string.Find')
 
 function format(fmt, _args_) -> _format(fmt, args)

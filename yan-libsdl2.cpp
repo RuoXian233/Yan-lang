@@ -41,6 +41,7 @@ YAN_C_API_START builtins::YanModuleDeclearation YanModule_OnLoad() {
     m->AddSymbol("CreateRenderer", { "window", "index", "__flags__" });
     m->AddSymbol("DestroyRenderer", { "renderer" });
     m->AddSymbol("PollEvent", {});
+    m->AddSymbol("Acos", { "x" });
     return m;
 }
 YAN_C_API_END
@@ -151,6 +152,20 @@ YAN_C_API_END
 YAN_C_API_START builtins::YanObject Quit(builtins::YanContext ctx) {
     sdl2::SDL_Quit();
     return (new RuntimeResult)->Success(Number::null);
+}
+YAN_C_API_END
+
+
+YAN_C_API_START builtins::YanObject Acos(builtins::YanContext ctx) {
+    auto arg = ctx->symbols->Get("x");
+    ASSERT_TYPE_MATCH(arg, Number);
+
+    auto _num = As<Number>(arg);
+    if (builtins::Math::HoldsInteger(_num)) {
+        return (new RuntimeResult)->Success(new Number(acos(builtins::Math::GetInt(_num))));
+    } else {
+        return (new RuntimeResult)->Success(new Number(acos(builtins::Math::GetFloat(_num))));
+    }
 }
 YAN_C_API_END
 

@@ -1,4 +1,5 @@
 import('string')
+import('os')
 
 var _getNativeCallStackInfo = require('@inspect.GetNativeCallStackInfo')
 var getCallStackInfo = require('@inspect.GetCallStackInfo')
@@ -40,4 +41,15 @@ function parseNativeCallStackInfo(info)
 		s.extract()
 	end
 	return stack
+end
+
+function decodeStackAddress(stackList)
+	var addresses = for stack in stackList then stack.func
+	for address in addresses then
+		var ret = os.system(string.format('addr2line -e yan -a %s -f -p --demangle', string.sub(address, 5, len(address))))
+		if ret != 0 then
+			panic('Command "addr2line" invokation failed (maybe not on GNU/Linux ?)')
+			break
+		end
+	end
 end

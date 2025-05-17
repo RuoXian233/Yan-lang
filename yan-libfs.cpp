@@ -525,7 +525,7 @@ YAN_C_API_START builtins::YanObject Close(builtins::YanContext ctx) {
 YAN_C_API_END
 
 
-YAN_C_API_START builtins::YanObject GetFileType(builtins::YanContext ctx) {
+YAN_C_API_START builtins::YanObject GetFileType_(builtins::YanContext ctx) {
     auto result = new RuntimeResult;
     auto arg = ctx->symbols->Get("_path");
     if (arg->typeName != std::string("String")) {
@@ -668,7 +668,7 @@ YAN_C_API_START builtins::YanObject _GetFreeSpace(builtins::YanContext ctx) {
 }
 YAN_C_API_END
 
-YAN_C_API_START builtins::YanObject GetFileSize(builtins::YanContext ctx) {
+YAN_C_API_START builtins::YanObject GetFileSize_(builtins::YanContext ctx) {
     auto result = new RuntimeResult;
     auto arg = ctx->symbols->Get("_file");
     if (arg->typeName != std::string("String")) {

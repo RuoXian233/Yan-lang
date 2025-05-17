@@ -1104,3 +1104,16 @@ ____
         Caught Error: RuntimeError: Division by zero [at debug.yan:11]
         Recovered
     ```
+
+    若是我们希望获取异常发生时的调用栈回溯，则需要用到 inspect 内置库中的函数
+    - **inspect** 库函数列表:
+
+    - **inspect.getCallStackInfo() -> String**: 获取当前栈帧以前的调用栈列表（包括当前）
+    - **inspect.getLocals() -> Dictionary\[Any\]**: 获取当前栈帧的局部变量值快照
+    - **inspect.printLocals() -> null**: 以可读性更高的方式打印出当前栈帧所有局部变量值
+    - **inspect._getNativeCallStackInfo() -> String**: 获取解释器的本地调用栈回溯（C++调用栈）
+    - **inspect.parseNativeCallStackInfo(info: String) -> List\[CallStackInfo\]**: 将本地调用栈信息包装成对象
+    - **inspect.decodeStackAddress(stackList: List\[CallStackInfo\])**: 解析本地调用栈（需 addr2line 命令行工具）
+    -
+    - **inspect** 类对象:
+    - **CallStackInfo**: 表示一个调用栈帧的信息

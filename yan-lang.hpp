@@ -1,10 +1,19 @@
-﻿#include <utility>
-#ifdef _MSC_VER
+﻿#ifdef _MSC_VER
     #define _CRT_SECURE_NO_WARNINGS
+    #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+    #define _SILENCE_TR1_NAMESPACE_DEPRECATION_WARNING
+    #define _SILENCE_CXX17_ADAPTOR_TYPEDEFS_DEPRECATION_WARNING
+    #define _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING
 #endif
+#include <utility>
 
-#define YAN_C_API_START extern "C" {
-#define YAN_C_API_END }
+#ifndef _MSC_VER
+    #define YAN_C_API_START extern "C" {
+    #define YAN_C_API_END }
+#else
+    #define YAN_C_API_START extern "C" { __declspec(dllexport) 
+    #define YAN_C_API_END }
+#endif
 #define YAN_CONTEXT_DECORATION(current) ctx->ctxLabel = std::format("@{}." #current " (aka '{}')", moduleName, ctx->ctxLabel)
 #define YAN_METHOD_CONTEXT_DECORATION(name) ctx->ctxLabel = std::format("{}.{}", this->className, name)
 // deprecated macro
@@ -27,6 +36,8 @@
 #define WARN() (std::cout << YELLOW)
 #define ERROR() (std::cout << RED)
 #define DEBUG() (std::cout << CYAN)
+
+#define DICT_PARSE_DEPTH 10
 
 
 #include <cstring>
@@ -51,8 +62,12 @@
 #include <cstring>
 #include <cstdint>
 
+#ifdef _WIN32
+    #pragma comment(lib, "DbgHelp.lib")
+#endif
 
-const char *YAN_LANG_VERSION = "2.0";
+
+const char *YAN_LANG_VERSION = "3.2";
 const char *TOKEN_TYPE_TAGS[] {"Int", "Float", "OP_Plus", "OP_Minus", "OP_Mul", "OP_Div", "OP_Pow", 
                             "Lparen", "Rparen", "LSquare", "RSquare", "Identifier", "Keyword", 
                             "OP_Eq", "OP_Equal", "OP_Nequal", "OP_Lt", "OP_Gt", "OP_Lte", "OP_Gte", "Comma", "Arrow", "String", "Newline", "Dot", "Colon", "LStart", "RStart",
@@ -74,7 +89,7 @@ const std::vector<std::string> LETTERS_WITH_DIGITS {
 
 const std::vector<std::string> KEYWORDS {
     "var", "and", "or", "not", "if", "elif", "then", "else", "for", "while", "step", "to", "function", "end", "return", "continue", "break", "in", "new", "nonlocal",
-    "defer", "struct"
+    "defer", "struct", "use"
 };
 
 const std::vector<std::string> STATEMENT_SEPERATORS {
@@ -135,6 +150,9 @@ static long currentCallStackDepth = 0;
 unsigned overflowCount = 0;
 const unsigned INVILID_OVERFLOW_TOLERANCE = 10;
 
+#undef min
+#undef max
+
 
 class BigInteger {
     using size_t = std::size_t;
@@ -190,7 +208,7 @@ public:
         }
         if (n >= 0) {
             sign = true;
-        } else if (n == LONG_LONG_MIN) {
+        } else if (n == std::numeric_limits<long long>::min()) {
             *this = "-9223372036854775808";
             return *this;
         } else if (n < 0) {
@@ -794,12 +812,21 @@ struct Token {
 
 using Tokens = std::vector<Token>;
 
-std::string SubReplace(const std::string &resource_str, const std::string &sub_str, const std::string &new_str) {
+std::string SubReplace(const std::string &resource_str, const std::string &sub_str, const std::string &new_str, int max = -1) {
     std::string dst_str = resource_str;
     std::string::size_type pos = 0;
+    int count = 0;
+    if (max == 0) {
+        return resource_str;
+    }
 
     while((pos = dst_str.find(sub_str)) != std::string::npos) {
         dst_str.replace(pos, sub_str.length(), new_str);
+        count++;
+
+        if (max != -1 && count >= max) {
+            break;
+        }
     }
     return dst_str;
 }
@@ -940,7 +967,11 @@ public:
         }
         while (rt != nullptr) {
             // result += std::format("  at {}  [{}:{}] <+{}>\n", rt->ctxLabel, pos->filename, pos->line + 1, (void *) pos);
-            result += std::format("  at {}{}{} [{}{}{}:{}:{}]\n", CYAN, rt->ctxLabel, RESET, YELLOW, pos->filename, RESET, pos->line + 1, pos->column + 1);
+            if (pos == nullptr) {
+                result += std::format("  at {}{}{} [{}{}{}]\n", CYAN, rt->ctxLabel, RESET, YELLOW, "?:?", RESET);
+            } else {
+                result += std::format("  at {}{}{} [{}{}{}:{}:{}]\n", CYAN, rt->ctxLabel, RESET, YELLOW, pos->filename, RESET, pos->line + 1, pos->column + 1);
+            }
             pos = rt->parentEntry;
             rt = rt->parent;
         }
@@ -1039,7 +1070,37 @@ public:
         }
         return rs.str();
     #else 
-        return "[Platform not supported]";
+        constexpr int STACK_INFO_BUFFER_SIZE = 1024;
+        constexpr int MAX_CALL_STACK_DEPTH = 16;
+        void *pStack[MAX_CALL_STACK_DEPTH];
+        static char szStackInfo[STACK_INFO_BUFFER_SIZE * MAX_CALL_STACK_DEPTH];
+        static char szFrameInfo[STACK_INFO_BUFFER_SIZE];
+
+        win32::HANDLE process = win32::GetCurrentProcess();
+        win32::SymInitialize(process, nullptr, true);
+        win32::WORD frames = win32::CaptureStackBackTrace(0, MAX_CALL_STACK_DEPTH, pStack, NULL);
+        strcpy(szStackInfo, "Stack traceback:\n");
+
+        for (win32::WORD i = 0; i < frames; i++) {
+            win32::DWORD64 address = (win32::DWORD64) (pStack[i]);
+            win32::DWORD64 displacementSym = 0;
+            char buffer[sizeof(win32::SYMBOL_INFO) + MAX_SYM_NAME * sizeof(win32::TCHAR)];
+            win32::PSYMBOL_INFO pSymbol = (win32::PSYMBOL_INFO) buffer;
+            pSymbol->SizeOfStruct = sizeof(win32::SYMBOL_INFO);
+            pSymbol->MaxNameLen = MAX_SYM_NAME;
+
+            win32::DWORD displacementLine = 0;
+            win32::IMAGEHLP_LINE64 line;
+            line.SizeOfStruct = sizeof(win32::IMAGEHLP_LINE64);
+
+            if (win32::SymFromAddr(process, address, &displacementSym, pSymbol) && win32::SymGetLineFromAddr64(process, address, &displacementLine, &line)) {
+                snprintf(szFrameInfo, sizeof(szFrameInfo), "  %s() at %s:%d [0x%x]\n", pSymbol->Name, line.FileName, line.LineNumber, pSymbol->Address);
+            } else {
+                snprintf(szFrameInfo, sizeof(szFrameInfo), "  <unknown frame> at ? (err %d)\n", win32::GetLastError());
+            }
+            strcat(szStackInfo, szFrameInfo);
+        }
+        return std::string(szStackInfo);
     #endif
     }
 
@@ -1446,6 +1507,7 @@ enum class NodeType {
     NonlocalStatement,
     Defer,
     StructDefStmt,
+    UseStmt,
     Invilid
 };
 
@@ -1459,7 +1521,7 @@ const std::vector<std::string> NODE_TYPE_TAGS {
     "Dictionary", "Attribution", "AdvancedVarAccess", 
     "NewExpression",
     "AttributionCall", "SubscriptionCall",
-    "NonlocalStatement",
+    "NonlocalStatement", "UseStatement",
     "Invilid" 
 };
 
@@ -1481,6 +1543,8 @@ struct NodeBase {
     virtual inline std::string ToString() {
         return std::format("<Node {} at {}>", NODE_TYPE_TAGS[static_cast<int>(this->nodeType)], static_cast<void *>(this));
     }
+
+    static std::string DumpAST(NodeBase *node, int currentDepth = 0, const std::string &prefix = "");
 
 };
 
@@ -1590,6 +1654,15 @@ struct StructDefStmtNode : public NodeBase {
         this->st = sn.st;
         this->et = sn.et;
         this->args = args;
+    }
+};
+
+struct UseStmtNode : public NodeBase {
+    std::string arg;
+
+    explicit UseStmtNode(const std::string &arg, Position *st, Position *et) : arg(arg), NodeBase(NodeType::UseStmt) {
+        this->st = st;
+        this->et = et;
     }
 };
 
@@ -1942,8 +2015,129 @@ std::pair<Position *, Position *> GetPosition(NodeBase *node) {
         return std::make_pair(dynamic_cast<AdvancedVarAccessNode *>(node)->st, dynamic_cast<AdvancedVarAccessNode *>(node)->et);
     } else if (node->nodeType == NodeType::NewExpression) {
         return std::make_pair(dynamic_cast<NewExprNode *>(node)->st, dynamic_cast<NewExprNode *>(node)->et);
+    } else if (node->nodeType == NodeType::Defer) {
+        return std::make_pair(dynamic_cast<DeferNode *>(node)->st, dynamic_cast<DeferNode *>(node)->et);
+    } else if (node->nodeType == NodeType::StructDefStmt) {
+        return std::make_pair(dynamic_cast<StructDefStmtNode *>(node)->st, dynamic_cast<StructDefStmtNode *>(node)->et);
+    } else if (node->nodeType == NodeType::UseStmt) {
+        return std::make_pair(dynamic_cast<UseStmtNode *>(node)->st, dynamic_cast<UseStmtNode *>(node)->et);
     }
     return std::make_pair(nullptr, nullptr);
+}
+
+
+std::string NodeBase::DumpAST(NodeBase *node, int currentDepth, /*unused*/ const std::string &prefix)  {
+    std::string indent;
+    std::string indent2;
+    if (currentDepth == 1) {
+        indent = "|---";
+    } else if (currentDepth > 1) {
+        for (int i = 0; i < currentDepth - 1; i++) {
+            indent += "|   ";
+        }
+        indent += "|---";
+    }
+
+    int depth2 = 2 * currentDepth;
+    for (int i = 0; i < depth2 - 1; i++) {
+        indent2 += "|   ";
+    }
+    indent2 += "|---";
+
+    std::string info = std::format(
+        "{}{} 0x{} <{}:{}:{}> <{}:{}:{}> ", prefix, NODE_TYPE_TAGS[static_cast<int>(node->nodeType)], (void *) node,
+        node->st->filename, node->st->line + 1, node->st->column,
+        node->et->filename, node->et->line + 1, node->et->column 
+    );
+    
+    if (node->nodeType == NodeType::Number) {
+        auto numberNode = dynamic_cast<NumberNode *>(node);
+        if (numberNode->numberToken.type == TokenType::Int) {
+            return std::format("{}{}{}", indent, info, *(int *) numberNode->numberToken.value);
+        } else {
+            return std::format("{}{}{}", indent, info, *(float *) numberNode->numberToken.value);
+        }
+    } else if (node->nodeType == NodeType::Expression) {
+        auto expressionNode = dynamic_cast<BinaryOperationNode *>(node);
+        auto a = std::format("{}\n{}{}", info, indent, NodeBase::DumpAST(expressionNode->left, currentDepth + 1));
+        auto b = std::format("{}{}", indent, NodeBase::DumpAST(expressionNode->right, currentDepth + 1));
+        auto c = std::format("{}{}", indent2, expressionNode->binaryOperator.ToString());
+        return std::format("{}\n{}\n{}", a, b, c);
+    } else if (node->nodeType == NodeType::SingleExpression) {
+        auto singleExpressionNode = dynamic_cast<UnaryOperationNode *>(node);
+        auto a = std::format("{}\n{}{}", info, indent2, singleExpressionNode->unaryOperator.ToString());
+        auto b = std::format("{}{}", indent, NodeBase::DumpAST(singleExpressionNode->node, currentDepth + 1));
+        return std::format("{}\n{}", a, b);
+    } else if (node->nodeType == NodeType::VarAccess) {
+        auto varAccessNode = dynamic_cast<VariableAccessNode *>(node);
+        return std::format("{}{}", info, *((std::string *) varAccessNode->variableNameToken.value));
+    } else if (node->nodeType == NodeType::VarAssign) {
+        auto varAssignNode = dynamic_cast<VariableAssignNode *>(node);
+        auto a = std::format("{}\n{}{}", info, indent2, *(std::string *) varAssignNode->variableNameToken.value);
+        auto b = std::format("{}{}", indent, NodeBase::DumpAST(varAssignNode->valueNode, currentDepth + 1));
+        return std::format("{}\n{}", a, b);
+    } else if (node->nodeType == NodeType::ForExpression) {
+        auto forExpressionNode = dynamic_cast<ForExpressionNode *>(node);
+        if (forExpressionNode->rangeBasedLoop) {
+            auto a = std::format("{}[ranged]\n{}{}", info, indent2, *(std::string *) forExpressionNode->var.value);
+            auto b = std::format("{}{} [for-start]", indent, NodeBase::DumpAST(forExpressionNode->range, currentDepth + 1));
+            auto c = std::format("{}{} [for-body]", indent, NodeBase::DumpAST(forExpressionNode->body, currentDepth + 1));
+            return std::format("{}\n{}\n{}", a, b, c);
+        } else {
+            auto a = std::format("{}\n{}{}", info, indent2, *(std::string *) forExpressionNode->var.value);
+            auto b = std::format("{}{} [for-start]", indent, NodeBase::DumpAST(forExpressionNode->stvNode, currentDepth + 1));
+            auto c = std::format("{}{} [for-end]", indent, NodeBase::DumpAST(forExpressionNode->etvNode, currentDepth + 1));
+            if (forExpressionNode->stepvNode) {
+                c += std::format("\n{}{} [for-step]", indent, NodeBase::DumpAST(forExpressionNode->stepvNode, currentDepth + 1));
+            }
+            auto d = std::format("{}{} [for-body]", indent, NodeBase::DumpAST(forExpressionNode->body, currentDepth + 1));
+            return std::format("{}\n{}\n{}\n{}", a, b, c, d);
+        }
+    } else if (node->nodeType == NodeType::WhileExpression) {
+        auto whileExpressionNode = dynamic_cast<WhileExpressionNode *>(node);
+    } else if (node->nodeType == NodeType::IfExpression) {
+        auto ifExpressionNode = dynamic_cast<IfExpressionNode *>(node);
+    } else if (node->nodeType == NodeType::FunctionCall) {
+        auto functionCallNode = dynamic_cast<FunctionCallNode *>(node);
+    } else if (node->nodeType == NodeType::FunctionDefinition) {
+        auto functionDefinitionNode = dynamic_cast<FunctionDefinitionNode *>(node);
+    } else if (node->nodeType == NodeType::String) {
+        auto stringNode = dynamic_cast<StringNode *>(node);
+    } else if (node->nodeType == NodeType::List) {
+        auto listNode = dynamic_cast<ListNode *>(node);
+        std::string content;
+        for (unsigned i = 0; i < listNode->elements.size(); i++) {
+            if (!i) {
+                content += std::format("\n{}\n{}\n", info, NodeBase::DumpAST(listNode->elements[i], currentDepth + 1));
+            } else {
+                content += std::format("{} {}\n", indent, NodeBase::DumpAST(listNode->elements[i], currentDepth + 1));
+            }
+        }
+        return content;
+    } else if (node->nodeType == NodeType::Return) {
+        auto returnNode = dynamic_cast<ReturnStatementNode *>(node);
+    } else if (node->nodeType == NodeType::Break) {
+        auto breakNode = dynamic_cast<BreakStatementNode *>(node);
+    } else if (node->nodeType == NodeType::Continue) {
+        auto continueNode = dynamic_cast<ContinueStatementNode *>(node);
+    } else if (node->nodeType == NodeType::Subscription) {
+        auto subscriptionNode = dynamic_cast<SubscriptionNode *>(node);
+    } else if (node->nodeType == NodeType::Dictionary) {
+        auto dictionaryNode = dynamic_cast<DictionaryNode *>(node);
+    } else if (node->nodeType == NodeType::Attribution) {
+        auto attributionNode = dynamic_cast<AttributionNode *>(node);
+    } else if (node->nodeType == NodeType::AdvancedVarAccess) {
+        auto advancedVarAccessNode = dynamic_cast<AdvancedVarAccessNode *>(node);
+    } else if (node->nodeType == NodeType::NewExpression) {
+        auto newExpressionNode = dynamic_cast<NewExprNode *>(node);
+    } else if (node->nodeType == NodeType::Defer) {
+        auto deferNode = dynamic_cast<DeferNode *>(node);
+    } else if (node->nodeType == NodeType::StructDefStmt) {
+        auto structDefStmtNode = dynamic_cast<StructDefStmtNode *>(node);
+    } else if (node->nodeType == NodeType::UseStmt) {
+        auto useStmtNode = dynamic_cast<UseStmtNode *>(node);
+    }
+    return "[Invalid node]";
 }
 
 
@@ -2085,6 +2279,32 @@ public:
                 return result->Success(new StructDefStmtNode(sn, ctorParams));
             } else {
                 return result->Success(new StructDefStmtNode(sn));
+            }
+        } else if (this->currentToken.Matches<std::string>(TokenType::Keyword, "use")) {
+            result->RegisterAdvance();
+            this->Advance();
+
+            if (this->currentToken.type != TokenType::Identifier && this->currentToken.type != TokenType::String) {
+                return result->Failure(new SyntaxError(
+                    "'use' should come before an module name or an specific module path",
+                    this->currentToken.st, this->currentToken.et
+                ));
+            }
+
+            std::string importArgument;
+
+            if (this->currentToken.type == TokenType::Identifier) {
+                auto arg = *(std::string *) this->currentToken.value;
+                result->RegisterAdvance();
+                this->Advance();
+                return result->Success(new UseStmtNode(arg, this->currentToken.st, this->currentToken.et));
+            } else if (this->currentToken.type == TokenType::String) {
+                auto s = *(std::string *) this->currentToken.value;
+                auto c = std::count(s.begin(), s.end(), '.');
+                auto arg = SubReplace(s, ".", "/", c - 1);
+                result->RegisterAdvance();
+                this->Advance();
+                return result->Success(new UseStmtNode(arg, this->currentToken.st, this->currentToken.et));
             }
         }
 
@@ -4336,7 +4556,7 @@ struct String : public Object {
     }
 
     std::pair<Object *, Error *> GetCompEquals(Object* other) override {
-        if (other->typeName == "String") {
+        if (other->typeName == std::string("String")) {
             return this->s == dynamic_cast<String *>(other)->s ? std::make_pair(new Number(1), nullptr) : std::make_pair(new Number(0), nullptr);
         } else {
             return std::make_pair(nullptr, Object::IllegalOperation(other, "=="));
@@ -4344,7 +4564,7 @@ struct String : public Object {
     }
 
     std::pair<Object *, Error *> GetCompNequals(Object* other) override {
-        if (other->typeName == "String") {
+        if (other->typeName == std::string("String")) {
             return this->s == dynamic_cast<String *>(other)->s ? std::make_pair(new Number(0), nullptr) : std::make_pair(new Number(1), nullptr);
         } else {
             return std::make_pair(nullptr, Object::IllegalOperation(other, "!="));
@@ -4449,7 +4669,7 @@ template <>
 inline std::string StringifySequence(const std::vector<Object *> &seq) {
     std::string result = "[";
     for (int i = 0; i < seq.size(); i++) {
-        if (seq[i]->typeName == "String") {
+        if (seq[i]->typeName == std::string("String")) {
             std::ostringstream oss;
             As<String>(seq[i])->Representation(oss);
             result += oss.str();
@@ -4607,6 +4827,8 @@ struct List : public Object {
 };
 
 std::string StringifyMapping(const std::map<Object *, Object *> &mapping, std::string prefIgnore = "", std::string suffIgnore = "") {
+    static int x;
+    x++;
     std::string result = "{";
     int i = 0;
     for (auto &[k, v] : mapping) {
@@ -4623,17 +4845,21 @@ std::string StringifyMapping(const std::map<Object *, Object *> &mapping, std::s
                 continue;
             }
         }
-        if (k->typeName == "String") {
+        if (k->typeName == std::string("String")) {
             str = std::string("'") + k->ToString() + std::string("'");
         } else {
             str = k->ToString();
         }
         result += str;
         result += ": ";
-        if (v->typeName == "String") {
+        if (v->typeName == std::string("String")) {
             str = std::string("'") + v->ToString() + std::string("'");
         } else {
-            str = v->ToString();
+            if (x < DICT_PARSE_DEPTH) {
+                str = v->ToString();
+            } else {
+                str = "[...]";
+            }
         }
         result += str;
         if (i + 1 != mapping.size()) {
@@ -4641,6 +4867,7 @@ std::string StringifyMapping(const std::map<Object *, Object *> &mapping, std::s
         }
         i++;
     }
+    x--;
     return result + "}";
 }
 
@@ -4650,6 +4877,19 @@ struct Dictionary : public Object {
     using ObjectWithError = std::pair<Object *, Error *>;
 
     explicit Dictionary(const std::map<Object *, Object *> &elements) : elements(elements), Object("Dictionary") {}
+
+    static bool HasKey(const std::map<Object *, Object *> &m, Object *k) {
+        for (const auto [key, _] : m) {
+            auto [result, error] = key->GetCompEquals(k);
+            if (error != nullptr) {
+                return false;
+            }
+            if (result->AsBool()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     std::vector<Object *> GetKeys() {
         std::vector<Object *> result;
@@ -4778,6 +5018,7 @@ public:
     RuntimeResult *VisitStructDef(NodeBase *node, Context *ctx);
     RuntimeResult *VisitNonlocal(NodeBase *node, Context *ctx);
     RuntimeResult *VisitDefer(NodeBase *node, Context *ctx);
+    RuntimeResult *VisitUse(NodeBase *node, Context *ctx);
     std::vector<Context *> *GetCallStack() { return this->callStack; }
     [[noreturn]] RuntimeResult *VisitEmpty(NodeBase *node, Context *ctx);
     ~Interpreter();
@@ -5233,14 +5474,14 @@ struct Method : public Function {
 };
 
 
-void Interprete(const std::string &, const std::string &, InterpreterStartMode, const std::string & = "", Context * = nullptr, Position *parentEntry = nullptr);
+void Interprete(const std::string &, const std::string &, InterpreterStartMode, const std::string & = "", Context * = nullptr, Position * = nullptr, RuntimeResult ** = nullptr);
 void SetBuiltins(SymbolTable *global);
 const std::vector<std::string> builtinNames { 
     "print", "println", "typeof", "readLine", "len", "parseInt", "parseFloat", "str", "eval",
     "sin", "cos", "tan", "abs", "log", "ln", "sqrt", "isFloating", "isInteger",
     "input", "import", "set", "require",
     "readFile", "writeFile", "append", "concat", "remove", "builtins", "panic", "del",
-    "range", "addressOf", "keys", "values", "global", "recover", "BigInteger", "exit"
+    "range", "addressOf", "keys", "values", "global", "recover", "BigInteger", "exit", "keyExists"
 };
 
 std::map<std::string, std::string> *envVars = nullptr;
@@ -5350,6 +5591,7 @@ namespace builtins {
     [[noreturn]] YanObject Invilid(YanContext ctx) {
         std::cerr << "Fatal: Unknown builtin access" << std::endl;
         assert(false);
+        return nullptr; // Just handle MSVC compiler
     }
 
     Error *AssertYanTypeMatches(YanContext ctx, Object *obj, const std::string &argName, const std::vector<std::string> &validTypes) {
@@ -5756,6 +5998,32 @@ namespace builtins {
             }
             return result->Success(new List(values));
         }
+
+        YanObject KeyExists(YanContext ctx) {
+            auto result = new RuntimeResult;
+            auto arg1 = ctx->symbols->Get("_dict");
+            auto arg2 = ctx->symbols->Get("_key");
+            auto err = AssertYanTypeMatches(ctx, arg1, "_dict", { "Dictionary", "ClassObject" });
+
+            if (err != nullptr) {
+                return result->Failure(err);
+            } 
+            auto dict = As<Dictionary>(arg1);
+            auto keys = dict->GetKeys();
+
+            bool flag = false;
+            for (const auto key : keys) {
+                auto [compResult, error] = arg2->GetCompEquals(key);
+                if (error != nullptr) {
+                    return result->Failure(error);
+                }
+                if (As<Number>(compResult)->AsBool()) {
+                    flag = true;
+                    break;
+                }
+            }
+            return result->Success(new Number((int) flag));
+        }
     }
     
     YanObject Set(YanContext ctx) {
@@ -6069,8 +6337,15 @@ namespace builtins {
         }
 
         auto evaluationFrameId = std::format("<eval frame at {}>", (void *) ctx);
-        Interprete(evaluationFrameId, dynamic_cast<String *>(code)->s, InterpreterStartMode::Evaluation, evaluationFrameId, ctx, code->startPos);
-        return result->Success(Number::null);
+        RuntimeResult *r = new RuntimeResult;
+        Interprete(evaluationFrameId, dynamic_cast<String *>(code)->s, InterpreterStartMode::Evaluation, evaluationFrameId, ctx, code->startPos, &r);
+        if (r->ShouldReturn()) {
+            return result->Failure(new RuntimeError(
+                "Evaluation failure", code->startPos, code->endPos, ctx
+            ), r->error);
+        }
+        return result->Success(r->value);
+        //return result->Success(Number::null);
     }
 
     YanObject ParseInt(YanContext ctx) {
@@ -6267,7 +6542,8 @@ const std::map<std::string, builtins::BuiltinFunctionImplementation> builtinFunc
     { "global", builtins::Global },
     { "recover", builtins::Recover },
     { "BigInteger", builtins::BigInteger },
-    { "exit", builtins::Exit }
+    { "exit", builtins::Exit },
+    { "keyExists", builtins::List_::KeyExists }
 };
 
 const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry {
@@ -6306,7 +6582,8 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
     { "global", { "_varName", "_value" } },
     { "recover", { "__ret__" } },
     { "BigInteger", { "__val__" } },
-    { "exit", { "__code__" } }
+    { "exit", { "__code__" } },
+    { "keyExists", { "_dict", "_key" } }
 };
 
 #ifdef __linux__
@@ -6592,13 +6869,16 @@ DylibType OpenDynamicLibrary(const std::string &dylib) {
         }
         return descr;
     #elif defined(_WIN32)
-        auto s = std::format(".\\yan-{}.dll", dylib).c_str();
-        auto dll = win32::LoadLibrary(s);
+        auto s_ = std::format(".\\yan-{}.dll", dylib);
+        auto s = s_.c_str();
+        auto dll = win32::LoadLibraryW(ToWideString(std::string(s)).c_str());
         if (dll == nullptr) {
-            s = std::format("{}\\yan-{}.dll", builtins::GetEnvVar("native-lib-path"), dylib).c_str();
-            dll = win32::LoadLibrary(s);
+            s_ = std::format("{}\\yan-{}.dll", builtins::GetEnvVar("native-lib-path"), dylib);
+            s = s_.c_str();
+            dll = win32::LoadLibraryW( ToWideString(std::string(s)).c_str());
             if (dll == nullptr) {
                 std::cerr << "Fatal: Dynamic lib '" + dylib << "' opened failed: [WinError " << win32::GetLastError() << "]" << std::endl;
+                std::cerr << "[DEBUG] Err details: " << strerror(win32::GetLastError()) << std::endl;
                 return nullptr;
             }
         }
@@ -6922,6 +7202,8 @@ RuntimeResult *Interpreter::Visit(NodeBase *node, Context *ctx) {
             return this->VisitDefer(node, ctx);
         case NodeType::StructDefStmt:
             return this->VisitStructDef(node, ctx);
+        case NodeType::UseStmt:
+            return this->VisitUse(node, ctx);
         case NodeType::Invilid:
             return this->VisitEmpty(node, ctx);
     }
@@ -7376,7 +7658,7 @@ RuntimeResult *Interpreter::VisitFunctionCall(NodeBase *node, Context *ctx) {
     //         node->st, node->et, ctx
     //      ));
     // } else {
-    Object *returnValue;
+    Object *returnValue = Number::null;
     if (functionTarget->typeName == "Function") {
         auto target = dynamic_cast<Function *>(functionTarget);
         auto returnValueTmp = result->Register(target->Execute(args));
@@ -8193,6 +8475,7 @@ instantiate:
 [[noreturn]] RuntimeResult *Interpreter::VisitEmpty(NodeBase *node, Context *ctx) {
     std::cerr << "Fatal: Invilid node" << std::endl;
     assert(false);
+    return nullptr; // Just handle MSVC compiler
 }
 
 RuntimeResult *Interpreter::VisitDefer(NodeBase *node, Context *ctx) {
@@ -8266,6 +8549,32 @@ RuntimeResult *Interpreter::VisitStructDef(NodeBase *node, Context *ctx) {
     return result->Success(Number::null);
 }
 
+RuntimeResult *Interpreter::VisitUse(NodeBase *node, Context *ctx) {
+    auto result = new RuntimeResult;
+    auto importSpec = dynamic_cast<UseStmtNode *>(node)->arg;
+    auto tmpContext = new Context("__use_import_stmt__", ctx);
+    tmpContext->symbols = new SymbolTable;
+    tmpContext->symbols->Set("_symbol", new String(importSpec));
+    tmpContext->parentEntry = node->st;
+
+    auto ret = result->Register(builtins::Import(tmpContext));
+    if (result->ShouldReturn()) {
+        result->error->st = node->st;
+        result->error->et = node->et;
+        if (result->error->name != std::string("SyntaxError") && result->error->name != std::string("IllegalCharacterError")) {
+            dynamic_cast<RuntimeError *>(result->error)->SetContext(tmpContext);
+        }
+        return result;
+    }
+    if (ret->typeName == std::string("Number")) {
+        return result->Success(Number::null);
+    } else {
+        auto sl = Split(SubReplace(importSpec, ".", "/", std::count(importSpec.begin(), importSpec.end(), '.') - 1), ".");
+        ctx->symbols->Set(sl[sl.size() - 1], ret);
+        return result->Success(Number::null);
+    }
+}
+
 Interpreter::~Interpreter() = default;
 
 void Initialize() {
@@ -8287,30 +8596,44 @@ void Initialize() {
 }
 
 bool startAsShell = false;
+static bool lexingVerbose, parsingVerbose;
 
-void Interprete(const std::string &file, const std::string &text, InterpreterStartMode mode, const std::string &frameId, Context *parent, Position *parentEntry) {
+void Interprete(const std::string &file, const std::string &text, InterpreterStartMode mode, const std::string &frameId, Context *parent, Position *parentEntry, RuntimeResult **retVal) {
     auto lexer = new Lexer(file, ToWideString(text));
     auto result = lexer->MakeTokens();
     if (result.second != nullptr) {
         std::cerr << result.second->ToString() << std::endl;
+        if (retVal != nullptr) {
+            auto r = new RuntimeResult;
+            r->error = result.second;
+            *retVal = r;
+        }
         return;
     }
-    // if (debug) {
-    //     std::cout << "[DEBUG] Tokens: ";
-    //     PrintSequence(result.first);
-    //     std::cout << std::endl;    
-    // }
+
+    if (lexingVerbose) {
+        std::cout << "[lexing] Tokens: " << std::endl;
+        for (auto token : result.first) {
+            std::cout << "  " << token.ToString() << std::endl;
+        }
+    }
 
     auto parser = new Parser(result.first);
     auto parseResult = parser->Parse();
     if (parseResult->err != nullptr) {
         std::cerr << parseResult->err->ToString() << std::endl;
+        if (retVal != nullptr) {
+            auto r = new RuntimeResult;
+            r->error = parseResult->err;
+            *retVal = r;
+        }
         return;       
     } 
-    // if (debug) {
-    //     std::cout << "[DEBUG] AST: " << parseResult->ast->ToString() << std::endl;    
-    // }
 
+    if (parsingVerbose) {
+        std::cout << "[parsing] AST: " << NodeBase::DumpAST(parseResult->ast) << std::endl;
+    }
+ 
     auto interpreter = new Interpreter();
     Context *context;
     if (mode != InterpreterStartMode::Evaluation) {
@@ -8324,6 +8647,9 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
         context->parentEntry = parentEntry;
     }
     auto n = interpreter->Visit(parseResult->ast, context);
+    if (retVal != nullptr) {
+        *retVal = n;
+    }
     if (n->error != nullptr) {
         if (n->cause == nullptr) {
             std::cerr << n->error->ToString() << std::endl;
@@ -8405,12 +8731,12 @@ void Interprete(const std::string &file, const std::string &text, InterpreterSta
         }
     }
 
-    if (mode != InterpreterStartMode::Evaluation) {
-        for (auto r : contextResultCache) {
-            delete r;
-        }
-        contextResultCache.clear();
-    }
+    // if (mode != InterpreterStartMode::Evaluation) {
+    //     for (auto r : contextResultCache) {
+    //         delete r;
+    //     }
+    //     contextResultCache.clear();
+    // }
     
     delete lexer;
     delete parser;
@@ -8457,6 +8783,12 @@ void Finalize() {
     }
 
     delete envVars;
+}
+
+
+void SetVerboseState(bool lexing, bool parsing) {
+    lexingVerbose = lexing;
+    parsingVerbose = parsing;
 }
 
 void InterpreteFile(const std::string &filename) {

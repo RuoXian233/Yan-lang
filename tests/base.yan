@@ -5,3 +5,11 @@ for i = 0 to 100 then println(i)
 for i in range(10) then println(i)
 
 var a = var b = var c = {}
+
+struct X
+X.foo = function(this)
+    println(this)
+end
+
+var x = new X
+x.foo()

@@ -3,14 +3,28 @@
 
 int main(int argc, char **argv) {
     globalSymbolTable = new SymbolTable;
+    bool lexingDebug = false, parsingDebug = false;
+    int optionsCount = 0;
 
     Initialize();
     std::vector<std::string> args;
     for (int i = 0; i < argc; i++) {
-        args.push_back(std::string(argv[i]));
+        auto argString = std::string(argv[i]);
+        optionsCount += (int) argString.starts_with("-");
+        args.push_back(argString);
+    
+        if (argString == std::string("-verbose-lexing")) {
+            lexingDebug = true;
+        }
+
+        if (argString == std::string("-verbose-parsing")) {
+            parsingDebug = true;
+        }
     }
 
-    if (argc >= 2) {
+    SetVerboseState(lexingDebug, parsingDebug);
+
+    if (argc - optionsCount >= 2) {
         CopyCommandLineArgs(argc, argv, InterpreterStartMode::File, globalSymbolTable);
         InterpreteFile(std::string(argv[1]));
         Finalize();

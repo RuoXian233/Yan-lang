@@ -1,0 +1,12 @@
+var content = ''
+
+
+function loadJSON(src)
+    global('content', readFile(src))
+    println(content)
+end
+
+
+function parse()
+    s
+end
