@@ -362,11 +362,11 @@ YAN_C_API_START builtins::YanModule *YanModule_OnLoad() {
     m
     ->AddSymbol("Open", { "filename", "__mode__" })
     ->AddSymbol("Close", { "_fileObject" })
-    ->AddSymbol("GetFileType", { "_path" })
+    ->AddSymbol("GetFileType_", { "_path" })
     ->AddSymbol("Exists", { "_path" })
     ->AddSymbol("GetFilePermissions", { "_path" })
     ->AddSymbol("_GetFreeSpace", { "_path" })
-    ->AddSymbol("GetFileSize", { "_file" })
+    ->AddSymbol("GetFileSize_", { "_file" })
     ->AddSymbol("FormatSize", { "_num" })
     ->AddSymbol("GetLastWriteTime", { "_path" })
     ->AddSymbol("GetHardLinksCount", { "_path" })

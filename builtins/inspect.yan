@@ -13,6 +13,7 @@ function CallStackInfo_init(this, id, content, addr)
 	this.addr = addr
 
 	function CallStackInfo_extract(this)
+		1/0
 		var main = string.split(this.__content, '(')
 		this.file = main[0]
 		this.func = string.sub(main[1], 0, len(main[1]) - 5)

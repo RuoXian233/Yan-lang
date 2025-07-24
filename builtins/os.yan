@@ -1,1 +1,3 @@
 var system = require('@os.System')
+var getInterpreterConfigurations = require('@os.GetInterpreterConfigurations')
+var getPlatformInfo = require('@os.GetPlatformInfo')

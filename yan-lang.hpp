@@ -106,8 +106,10 @@ const std::map<std::string, std::string> REVERSED_ESCAPE_CHARACTERS {
     { "\'", "'" }
 };
 
-#if defined(__LP64__) || defined(_WIN64)
+#if defined(__x86_64__)
     const char *platformInfo = "AMD64";
+#elif defined(__aarch64__)
+    const char *platformInfo = "aarch64";
 #else
     const char *platformInfo = "i386";
 #endif
@@ -132,13 +134,16 @@ const std::map<std::string, std::string> REVERSED_ESCAPE_CHARACTERS {
         #include <dbghelp.h>
     }
     const char *platform = "win32";
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
     #include <dlfcn.h>
     #include <execinfo.h>
     #include <cxxabi.h> 
+#endif
+
+#if defined(__linux__)
     const char *platform = "linux";
 #elif defined(__APPLE__)
-    const char *platform = "darwin"
+    const char *platform = "darwin";
 #else
     const char *platform = "unknown";
 #endif
@@ -1014,7 +1019,7 @@ public:
     }
 
     static std::string GetNativeCallStackInfo(bool demangle = true, bool colored = true) {
-    #ifdef __linux__
+    #if defined(__linux__) || defined(__APPLE__)
         std::stringstream ss;
         void* addresses[256];
         const int n = backtrace(addresses, std::extent<decltype(addresses)>::value);
@@ -1069,7 +1074,7 @@ public:
             } 
         }
         return rs.str();
-    #else 
+    #elif defined(_WIN32)
         constexpr int STACK_INFO_BUFFER_SIZE = 1024;
         constexpr int MAX_CALL_STACK_DEPTH = 16;
         void *pStack[MAX_CALL_STACK_DEPTH];
@@ -1101,6 +1106,8 @@ public:
             strcat(szStackInfo, szFrameInfo);
         }
         return std::string(szStackInfo);
+    #else
+        
     #endif
     }
 
@@ -4052,7 +4059,8 @@ struct Number : public Object {
             auto b = this->value;
             return this->ComparisonOperation(a, b, ob->startPos, ob->endPos, TokenType::OP_Equal);
         }
-        return std::make_pair(nullptr, Object::IllegalOperation(other, "=="));
+        // return std::make_pair(nullptr, Object::IllegalOperation(other, "=="));
+        return std::make_pair(new Number(0), nullptr);
     }
 
     std::pair<Object *, Error *> GetCompNequals(Object *other) {
@@ -4068,7 +4076,8 @@ struct Number : public Object {
             auto b = this->value;
             return this->ComparisonOperation(a, b, ob->startPos, ob->endPos, TokenType::OP_Nequal);
         }
-       return std::make_pair(nullptr, Object::IllegalOperation(other, "!="));
+        // return std::make_pair(nullptr, Object::IllegalOperation(other, "!="));
+        return std::make_pair(new Number(0), nullptr);
     }
 
     std::pair<Object *, Error *> GetCompLt(Object *other) {
@@ -4494,6 +4503,7 @@ std::pair<Object *, Error *> Object::GetCompNequals(Object *other) {
     if (std::string(this->typeName) == std::string(other->typeName)) {
         return std::make_pair(new Number(1), nullptr);
     }
+    
     return std::make_pair(new Number((void *) this != (void *) other), nullptr);
     // return std::make_pair(nullptr, this->IllegalOperation(other, "!="));   
 }
@@ -4559,7 +4569,8 @@ struct String : public Object {
         if (other->typeName == std::string("String")) {
             return this->s == dynamic_cast<String *>(other)->s ? std::make_pair(new Number(1), nullptr) : std::make_pair(new Number(0), nullptr);
         } else {
-            return std::make_pair(nullptr, Object::IllegalOperation(other, "=="));
+            // return std::make_pair(nullptr, Object::IllegalOperation(other, "=="));
+            return std::make_pair(new Number(0), nullptr);
         }
     }
 
@@ -4567,7 +4578,8 @@ struct String : public Object {
         if (other->typeName == std::string("String")) {
             return this->s == dynamic_cast<String *>(other)->s ? std::make_pair(new Number(0), nullptr) : std::make_pair(new Number(1), nullptr);
         } else {
-            return std::make_pair(nullptr, Object::IllegalOperation(other, "!="));
+            // return std::make_pair(nullptr, Object::IllegalOperation(other, "!="));
+            return std::make_pair(new Number(0), nullptr);
         }
     }
 
@@ -4819,7 +4831,37 @@ struct List : public Object {
      std::pair<Object *, Error *> Len() override {
         return std::make_pair(new Number((int) this->elements.size()), nullptr);
     }
-    
+
+    std::pair<Object *, Error *> GetCompEquals(Object *other) override {
+        if (std::string(other->typeName) != std::string("List")) {
+            return std::make_pair(new Number(0), nullptr);
+        }
+        auto otherList = dynamic_cast<List *>(other);
+        
+        if (elements.size() != otherList->elements.size()) {
+            return std::make_pair(new Number(0), nullptr);
+        }
+        
+        for (size_t i = 0; i < elements.size(); ++i) {
+            auto res = elements[i]->GetCompEquals(otherList->elements[i]);
+            if (res.second) {
+                return res;
+            }
+            if (!res.first->AsBool()) {
+                return std::make_pair(new Number(0), nullptr);
+            }
+        }
+        return std::make_pair(new Number(1), nullptr);
+    }
+
+    std::pair<Object *, Error *> GetCompNequals(Object *other) override {
+        auto result = this->GetCompEquals(other);
+        if (result.second) {
+            return result;
+        } else {
+            return std::make_pair(new Number((int) !result.first->AsBool()), nullptr);
+        }
+    }
 
     inline std::string ToString() override {
         return StringifySequence(this->elements);
@@ -6586,10 +6628,12 @@ const std::map<std::string, std::vector<std::string>> builtinFuncParamsRegistry 
     { "keyExists", { "_dict", "_key" } }
 };
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     using DylibType = void *;
 #elif defined(_WIN32)
     using DylibType = win32::HMODULE;
+#else
+    #error "Platform not supported"
 #endif
 static std::map<std::string, std::pair<std::string, void *>> dynamicLoadedSymbol;
 std::map<std::string, DylibType> dylibs;
@@ -6638,6 +6682,11 @@ struct BuiltinFunction : public FunctionBase {
                         )));
                         return result;
                     }
+                    auto returnValue = result->Register(func(frameContext));
+                    if (result->ShouldReturn()) {
+                        return result;
+                    }
+                    return result->Success(returnValue);
                 }
             }
             result->Register(this->CheckAndPopulate(this->argDeclearation, args, frameContext));
@@ -6859,9 +6908,15 @@ static std::map<std::string, BuiltinFunction *> allBuiltins {
 DylibType OpenDynamicLibrary(const std::string &dylib) {
     // not implemented
     #ifdef __linux__
-        auto descr = dlopen(std::format("./yan-{}.so", dylib).c_str(), RTLD_LAZY);
+        const std::string SUFFIX = "so"
+    #elif defined(__APPLE__)
+        const std::string SUFFIX = "dylib";
+    #endif
+
+    #if defined(__linux__) || defined(__APPLE__)
+        auto descr = dlopen(std::format("./yan-{}.{}", dylib, SUFFIX).c_str(), RTLD_LAZY);
         if (descr == nullptr) {
-            descr = dlopen(std::format("{}/yan-{}.so", builtins::GetEnvVar("native-lib-path"), dylib).c_str(), RTLD_LAZY);
+            descr = dlopen(std::format("{}/yan-{}.{}", builtins::GetEnvVar("native-lib-path"), dylib, SUFFIX).c_str(), RTLD_LAZY);
             if (descr == nullptr) {
                 std::cerr << "Fatal: Dynamic lib '" + dylib << "' opened failed: " << dlerror() << std::endl;
                 return nullptr; 
@@ -7061,7 +7116,7 @@ builtins::YanObject builtins::BigInteger(builtins::YanContext ctx) {
 }
 
 auto LoadNativeFunctionImplementation(const std::string &dynamicLib, const std::string &name) -> RuntimeResult *(*)(Context *) {
-    #ifdef __linux__
+    #if defined(__linux__) || defined(__APPLE__)
         void *dylib = nullptr;
         void *symbol = nullptr;
         if (dylibs.find(dynamicLib) == dylibs.end()) {
@@ -7079,11 +7134,13 @@ auto LoadNativeFunctionImplementation(const std::string &dynamicLib, const std::
         } else {
             dylib = dylibs.at(dynamicLib);
         }
+    #else
+        #error "Platfrom not supported"
     #endif
 
     assert(dylib != nullptr);
     if (dynamicLoadedSymbol.find(name) == dynamicLoadedSymbol.end()) {
-        #ifdef __linux__
+        #if defined(__linux__) || defined(__APPLE__)
             symbol = dlsym(dylib, name.c_str());
             if (symbol == nullptr) {
                 std::cerr << "Fatal: Error locating symbol '" + name << "' in dynamic lib '" + dynamicLib + "': " << dlerror() << std::endl;
@@ -7099,7 +7156,7 @@ auto LoadNativeFunctionImplementation(const std::string &dynamicLib, const std::
         dynamicLoadedSymbol.insert(std::make_pair(name, std::make_pair(dynamicLib, symbol)));
     }
     if (nativeModules.find(dynamicLib) == nativeModules.end()) {
-        #ifdef __linux__
+        #if defined(__linux__) || defined(__APPLE__)
             symbol = dlsym(dylib, "YanModule_OnLoad");
             if (symbol == nullptr) {
                 std::cerr << "Fatal: Error locating onLoad() function of '" + dynamicLib + "'" << std::endl;
@@ -8461,7 +8518,9 @@ instantiate:
     }
     // boundedCtor->SetPos(node->st, node->et)->SetContext(ctx);
     boundedCtor->SetPos(node->st, node->et);
-    result->Register(boundedCtor->Execute(args));
+    // auto ctorIsolatedContext = new Context(ctx->ctxLabel);
+    // boundedCtor->SetContext(ctorIsolatedContext);
+    // result->Register(boundedCtor->Execute(args));
     if (result->ShouldReturn()) {
         result->error->st = node->st;
         result->error->et = node->et;

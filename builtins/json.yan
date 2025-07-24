@@ -1,12 +1,26 @@
-var content = ''
+struct JSONLoader[filePath]
 
 
-function loadJSON(src)
-    global('content', readFile(src))
-    println(content)
+JSONLoader.load = function(this)
+    this._content = readFile(this.filePath)
+    this._index = -1
 end
 
 
-function parse()
-    s
+JSONLoader._peek = function(this)
+    if this._index + 2 < len(this._content) then
+        return this._content[this._index + 1]
+    end
+    panic('Reach end of stream')
 end
+
+
+JSONLoader._get = function(this)
+    var c = this._content[this._index]
+    if this._index + 2 < len(this._content) then
+        this._index = this._index + 1
+    end
+    return c
+end
+
+
